@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import {
-  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, stoppageOdds, wealth, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, duel, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, stoppageOdds, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -75,6 +75,32 @@ describe('schedule', () => {
       for (const f of round) pairs.add(`${f.home}-${f.away}`);
     }
     expect(pairs.size).toBe(90);
+  });
+});
+
+describe('money for form and morale', () => {
+  it('sells more tickets to a side on a winning run', () => {
+    expect(gateIncome(3, 5, 3)).toBe(gateIncome(3, 5) + 15);
+    expect(gateIncome(3, 5, 9)).toBe(gateIncome(3, 5, 5));
+    const s = newGame(2, 3);
+    const me = s.schedule[0][0].home;
+    for (let r = 0; r < 3; r++) {
+      const f = s.schedule[r].find((x) => x.home === me || x.away === me)!;
+      [f.hg, f.ag] = f.home === me ? [r === 0 ? 0 : 2, 1] : [1, r === 0 ? 0 : 2];
+    }
+    s.round = 3;
+    expect(winStreak(s, me)).toBe(2);
+  });
+
+  it('lets a manager pay a match bonus for better morale in the next match', () => {
+    let s = newGame(2, 3);
+    const me = currentClubId(s);
+    const cash = s.clubs[me].cash;
+    s = reduce(s, { type: 'MATCH_BONUS' });
+    expect(s.clubs[me]).toMatchObject({ cash: cash - MATCH_BONUS_COST, morale: 1 });
+    expect(reduce(s, { type: 'MATCH_BONUS' })).toBe(s);
+    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    expect(s.clubs[me].morale).toBe(0);
   });
 });
 
@@ -208,6 +234,17 @@ describe('match model', () => {
     expect(scoringOdds({ ...side(5), att: 13 }, side(5))).toBeGreaterThan(scoringOdds(side(5), side(5)));
     expect(scoringOdds(side(5), { ...side(5), def: 24 })).toBeLessThan(scoringOdds(side(5), side(5)));
     expect(expectedChances({ ...side(5), mid: 24 }, side(5))).toBeGreaterThan(expectedChances(side(5), side(5)));
+  });
+
+  it('lets formations counter each other', () => {
+    // Three forwards overload a back three but are held by a back five.
+    expect(scoringOdds(side(5, '3-4-3'), side(5, '3-5-2'))).toBeGreaterThan(scoringOdds(side(5, '3-4-3'), side(5, '4-4-2')));
+    expect(scoringOdds(side(5, '3-4-3'), side(5, '5-3-2'))).toBeLessThan(scoringOdds(side(5, '3-4-3'), side(5, '4-4-2')));
+    expect(duel(FORMATIONS['4-5-1'], FORMATIONS['5-3-2'])).toBeLessThan(duel(FORMATIONS['4-5-1'], FORMATIONS['4-4-2']) - 0.45);
+    // An open formation gives both sides more chances, a closed one fewer.
+    const base = expectedChances(side(5), side(5));
+    expect(expectedChances(side(5), { ...side(5), shape: { ...FORMATIONS['4-4-2'], style: 1 } })).toBeGreaterThan(base);
+    expect(expectedChances({ ...side(5), shape: { ...FORMATIONS['4-4-2'], style: -1 } }, side(5))).toBeLessThan(base);
   });
 
   it('never lets a player go above the maximum level', () => {

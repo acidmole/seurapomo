@@ -1,6 +1,6 @@
 import {
   AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, fmt,
-  type Card, type FormationId, type Pos,
+  type Card, type FormationId, type Pos, type Shape,
 } from './data';
 
 export const START_CASH = 80;
@@ -13,8 +13,12 @@ export const ROUNDS = (LEAGUE_SIZE - 1) * 2;
 export const CUP_AFTER = [1, 4, 7, 11, 16];
 /** European rounds are played right after these league rounds (0-based). */
 export const EURO_AFTER = [3, 9, 14];
-export const LEAGUE_PRIZE = [130, 100, 80, 65, 50, 40, 30, 20, 10, 0];
-export const CUP_PRIZE = { winner: 100, finalist: 40 };
+export const LEAGUE_PRIZE = [250, 170, 120, 90, 70, 50, 35, 25, 15, 0];
+export const CUP_PRIZE = { winner: 200, finalist: 80 };
+/** Promising the players a bonus costs this much and wins extra chances in the club's next match. */
+export const MATCH_BONUS_COST = 15;
+/** Extra ticket income per league win in a row, up to five. */
+export const STREAK_GATE = 5;
 export const SELL_RATE = 0.6;
 export const MAX_LEVEL = 9;
 export const FULL_FITNESS = 9;
@@ -55,7 +59,7 @@ export interface Club {
   squad: Player[];
   formation: FormationId;
   boardPos: number;
-  /** -1, 0 or 1: applies to the next league match only. */
+  /** -1, 0 or 1: applies to the club's next match only. */
   morale: number;
   /** A card has promised a stoppage-time chance in the next league match. */
   surge?: boolean;
@@ -103,7 +107,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 17;
+export const STATE_VERSION = 18;
 
 export interface GameState {
   version: number;
@@ -155,6 +159,8 @@ export type Action =
   | { type: 'SET_FORMATION'; formation: FormationId }
   | { type: 'SELL'; playerId: number }
   | { type: 'REST'; playerId: number }
+  /** Promise the players a bonus for the next match. */
+  | { type: 'MATCH_BONUS' }
   | { type: 'BANKRUPT' }
   | { type: 'END_TURN' }
   | { type: 'CONTINUE' }
@@ -241,7 +247,7 @@ function newSquad(s: GameState, offset: number): Player[] {
 
 export interface Slot { pos: Pos; player: Player | null; eff: number }
 /** What a side brings to a match: summed levels of its forwards, midfielders, defenders and keeper. */
-export interface Strength { att: number; mid: number; def: number; gk: number; /** Average sisu of the starters. */ spirit: number; shape: { PU: number; KK: number; HY: number } }
+export interface Strength { att: number; mid: number; def: number; gk: number; /** Average sisu of the starters. */ spirit: number; shape: Shape }
 export interface Lineup extends Strength { slots: Slot[] }
 
 /** Best available eleven for the club's formation. Gaps are filled out of position at half skill. */
@@ -326,19 +332,28 @@ function makeSchedule(s: GameState): Fixture[][] {
 //
 // Players count by how far they are above or below the average level on the pitch, so two evenly matched
 // sides score the same whether they are all level 3 or all level 8. Formation shape gives fixed shifts on
-// top: an extra forward makes every chance better, an extra defender makes every chance against worse, an
-// extra midfielder wins chances.
+// top: forwards are counted against the opponent's defenders, an extra midfielder wins chances, and an open
+// or closed formation raises or lowers the number of chances for both sides.
 export const CHANCES_BASE = 4.85;
 export const HOME_CHANCES = 0.5;
 export const MORALE_CHANCES = 0.5;
-export const SCORE_TARGET = 9.15;
+export const SCORE_TARGET = 9.35;
 /** Target shift per level of a forward or defender; a midfielder moves the chance count by the same amount. */
 export const LEVEL_WEIGHT = 0.1;
 export const KEEPER_WEIGHT = 1.5;
-/** Target shift per forward beyond two, and per defender beyond four. */
-export const SHAPE_WEIGHT = 0.45;
+/**
+ * Forwards against defenders is a head count. With two defenders kept back for cover, every forward more than
+ * the opponent has left to mark him makes each chance better by this much, and every one fewer makes it worse.
+ */
+export const DUEL_STEP = 0.45;
+/** Extra when the forwards match the whole back line (three against three). */
+export const OVERLOAD_BONUS = 0.3;
+/** Extra penalty for a lone forward against a back five. */
+export const ISOLATED_PENALTY = 0.6;
+/** Chances added to both sides per open formation on the pitch, and removed per closed one. */
+export const TEMPO_CHANCES = 0.5;
 /** Chances won per midfielder more than the opponent has. */
-export const MIDFIELD_COUNT_CHANCES = 0.5;
+export const MIDFIELD_COUNT_CHANCES = 0.6;
 /** Chances won or lost per point of average sisu above or below 5, when the side is in a tough spot. */
 export const SPIRIT_CHANCES = 0.3;
 
@@ -375,20 +390,25 @@ function twoDiceAtLeast(need: number): number {
 
 const pitchAverage = (x: Strength, y: Strength) => (x.att + x.mid + x.def + x.gk + y.att + y.mid + y.def + y.gk) / 22;
 
+/** How much the attackers' numbers against the defenders' numbers lower the target. This is where formations counter each other. */
+export function duel(attackers: Shape, defenders: Shape): number {
+  const margin = attackers.HY - (defenders.PU - 2);
+  return DUEL_STEP * margin + (margin >= 2 ? OVERLOAD_BONUS : 0) - (margin <= -2 ? ISOLATED_PENALTY : 0);
+}
+
 /** Chance that one scoring chance of `x` ends up in `y`'s net. */
 export function scoringOdds(x: Strength, y: Strength): number {
   const avg = pitchAverage(x, y);
   const defence = y.def - y.shape.PU * avg + KEEPER_WEIGHT * (y.gk - avg);
   const attack = x.att - x.shape.HY * avg;
-  return twoDiceAtLeast(
-    SCORE_TARGET + LEVEL_WEIGHT * (defence - attack) - SHAPE_WEIGHT * (x.shape.HY - 2) + SHAPE_WEIGHT * (y.shape.PU - 4),
-  );
+  return twoDiceAtLeast(SCORE_TARGET + LEVEL_WEIGHT * (defence - attack) - duel(x.shape, y.shape));
 }
 
 export function expectedChances(x: Strength, y: Strength, bonus = 0): number {
   const avg = pitchAverage(x, y);
   const quality = x.mid - x.shape.KK * avg - (y.mid - y.shape.KK * avg);
-  return Math.max(0.5, CHANCES_BASE + MIDFIELD_COUNT_CHANCES * (x.shape.KK - y.shape.KK) + LEVEL_WEIGHT * quality + bonus);
+  const tempo = TEMPO_CHANCES * (x.shape.style + y.shape.style);
+  return Math.max(0.5, CHANCES_BASE + MIDFIELD_COUNT_CHANCES * (x.shape.KK - y.shape.KK) + LEVEL_WEIGHT * quality + tempo + bonus);
 }
 
 /**
@@ -426,8 +446,21 @@ function playMatch(s: GameState, a: Strength, b: Strength, aBonus = 0, bBonus = 
 }
 
 /** Ticket income for a home match. Meetings of teams high in the table draw bigger crowds. */
-export function gateIncome(homePos: number, awayPos: number): number {
-  return 15 + 3 * (LEAGUE_SIZE - homePos) + 2 * (LEAGUE_SIZE - awayPos);
+export function gateIncome(homePos: number, awayPos: number, streak = 0): number {
+  return 15 + 3 * (LEAGUE_SIZE - homePos) + 2 * (LEAGUE_SIZE - awayPos) + STREAK_GATE * Math.min(5, streak);
+}
+
+/** League wins in a row, up to now. A side on a run fills its ground. */
+export function winStreak(s: GameState, clubId: number): number {
+  let streak = 0;
+  for (let r = s.round - 1; r >= 0; r--) {
+    const f = s.schedule[r].find((x) => x.home === clubId || x.away === clubId);
+    if (!f || f.hg === null || f.ag === null) continue;
+    const won = f.home === clubId ? f.hg > f.ag : f.ag > f.hg;
+    if (!won) break;
+    streak++;
+  }
+  return streak;
 }
 
 function makeTies(entrants: Entrant[]): Tie[] {
@@ -526,7 +559,7 @@ export function createGame(config: GameConfig): GameState {
       color: human ? human.color : '#7b8794',
       cash: START_CASH,
       squad: newSquad(s, human ? 0 : aiOffsets[ai]),
-      formation: human ? '4-4-2' : pick(s, ['4-4-2', '4-3-3', '4-4-2', '5-3-2'] as FormationId[]),
+      formation: human ? '4-4-2' : pick(s, ['4-4-2', '4-3-3', '5-3-2', '3-4-3', '4-4-2'] as FormationId[]),
       boardPos: 0,
       morale: 0,
     });
@@ -752,6 +785,7 @@ function playMatchday(s: GameState) {
 function playLeagueRound(s: GameState) {
   const before = table(s);
   const posOf = (id: number) => before.findIndex((r) => r.id === id) + 1;
+  const streaks = new Map(s.clubs.map((c) => [c.id, winStreak(s, c.id)]));
   for (const f of s.schedule[s.round]) {
     const home = club(s, f.home);
     const away = club(s, f.away);
@@ -769,7 +803,7 @@ function playLeagueRound(s: GameState) {
     f.ag = played.bg;
     f.chances = played.chances;
     f.events = played.events;
-    f.gate = gateIncome(posOf(home.id), posOf(away.id));
+    f.gate = gateIncome(posOf(home.id), posOf(away.id), streaks.get(home.id));
     home.cash += f.gate;
     log(s, `${home.name} – ${away.name} ${f.hg}–${f.ag}${home.human ? `. Lipputulot ${fmt(f.gate)}.` : ''}`);
   }
@@ -820,7 +854,15 @@ function playTie(s: GameState, t: Tie): Entrant {
       : lineup(club(s, e.clubId));
   const a = strength(t.a);
   const b = strength(t.b);
-  ({ ag: t.ag, bg: t.bg, events: t.events } = playMatch(s, a, b, spiritBonus(a, b, true), spiritBonus(b, a, true)));
+  // Morale (from a card or a promised bonus) counts in the club's next match, whatever the competition.
+  const mood = (e: Entrant) => {
+    if (e.clubId === null) return 0;
+    const c = club(s, e.clubId);
+    const bonus = MORALE_CHANCES * c.morale;
+    c.morale = 0;
+    return bonus;
+  };
+  ({ ag: t.ag, bg: t.bg, events: t.events } = playMatch(s, a, b, spiritBonus(a, b, true) + mood(t.a), spiritBonus(b, a, true) + mood(t.b)));
   t.pens = t.ag === t.bg;
   t.winner = t.ag > t.bg ? 'a' : t.bg > t.ag ? 'b' : rand(s) < shootoutOdds(a, b) ? 'a' : 'b';
   if (t.pens) {
@@ -1016,6 +1058,13 @@ export function reduce(state: GameState, action: Action): GameState {
       else player.resting = true;
       return s;
     }
+
+    case 'MATCH_BONUS':
+      if (!inTurn || p || me.morale >= 1 || me.cash < MATCH_BONUS_COST) return state;
+      me.cash -= MATCH_BONUS_COST;
+      me.morale = 1;
+      log(s, `${me.name} lupaa pelaajille ottelubonuksen (${fmt(MATCH_BONUS_COST)}).`);
+      return s;
 
     case 'BANKRUPT':
       if (!inTurn || p || !isBroke(me)) return state;

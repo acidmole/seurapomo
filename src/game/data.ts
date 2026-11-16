@@ -1,14 +1,21 @@
 export type Pos = 'MV' | 'PU' | 'KK' | 'HY';
 export type FormationId = '4-4-2' | '4-3-3' | '3-5-2' | '5-3-2' | '4-5-1' | '3-4-3';
 
-export const FORMATIONS: Record<FormationId, { PU: number; KK: number; HY: number }> = {
-  '4-4-2': { PU: 4, KK: 4, HY: 2 },
-  '4-3-3': { PU: 4, KK: 3, HY: 3 },
-  '3-5-2': { PU: 3, KK: 5, HY: 2 },
-  '5-3-2': { PU: 5, KK: 3, HY: 2 },
-  '4-5-1': { PU: 4, KK: 5, HY: 1 },
-  '3-4-3': { PU: 3, KK: 4, HY: 3 },
+/**
+ * `style` is how the formation plays: 1 opens the game up (more chances for both sides), -1 closes it down
+ * (fewer for both), 0 is neither.
+ */
+export interface Shape { PU: number; KK: number; HY: number; style: -1 | 0 | 1 }
+
+export const FORMATIONS: Record<FormationId, Shape> = {
+  '4-4-2': { PU: 4, KK: 4, HY: 2, style: 0 },
+  '4-3-3': { PU: 4, KK: 3, HY: 3, style: 1 },
+  '3-5-2': { PU: 3, KK: 5, HY: 2, style: 0 },
+  '5-3-2': { PU: 5, KK: 3, HY: 2, style: -1 },
+  '4-5-1': { PU: 4, KK: 5, HY: 1, style: -1 },
+  '3-4-3': { PU: 3, KK: 4, HY: 3, style: 1 },
 };
+export const STYLE_NAME: Record<-1 | 0 | 1, string> = { [-1]: 'suljettu', 0: 'tasapainoinen', 1: 'avoin' };
 
 export const POS_NAME: Record<Pos, string> = {
   MV: 'maalivahti',
@@ -185,9 +192,9 @@ export interface EuroCompInfo {
 
 /** Index 0 is for the league champion, 1 for the runner-up, 2 for the third and fourth. */
 export const EURO_COMPS: EuroCompInfo[] = [
-  { name: 'Mestarien cup', entry: 60, win: 50, title: { winner: 150, finalist: 50 }, level: [6, 7.5] },
-  { name: 'Eurooppa-cup', entry: 40, win: 35, title: { winner: 100, finalist: 35 }, level: [5.5, 6.5] },
-  { name: 'Haastajacup', entry: 25, win: 25, title: { winner: 70, finalist: 25 }, level: [5, 6] },
+  { name: 'Mestarien cup', entry: 60, win: 50, title: { winner: 300, finalist: 100 }, level: [6, 7.5] },
+  { name: 'Eurooppa-cup', entry: 40, win: 35, title: { winner: 200, finalist: 70 }, level: [5.5, 6.5] },
+  { name: 'Haastajacup', entry: 25, win: 25, title: { winner: 140, finalist: 50 }, level: [5, 6] },
 ];
 export const EURO_ROUND_NAMES = ['Puolivälierät', 'Välierät', 'Loppuottelu'];
 

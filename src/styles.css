@@ -208,7 +208,7 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .bidder-turn .bidder-status { color: #17231b; }
 .bidder-out strong, .bidder-out .bidder-cash { color: var(--muted); text-decoration: line-through; }
 
-.pos { display: inline-block; min-width: 32px; padding: 4px 6px; background: var(--night); color: var(--cream); font: 700 13px/1 var(--display); letter-spacing: 0.06em; text-align: center; }
+.badge { display: inline-block; min-width: 32px; padding: 4px 6px; background: var(--night); color: var(--cream); font: 700 13px/1 var(--display); letter-spacing: 0.06em; text-align: center; }
 
 /* ---------- team sheet ---------- */
 
@@ -244,11 +244,12 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .table-scroll { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .table th { font: 600 12px/1 var(--display); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.table th, .table td { padding: 6px; text-align: center; border-bottom: 1px solid var(--line); }
+.table th, .table td { padding: 6px 4px; text-align: center; border-bottom: 1px solid var(--line); }
 .table .left { text-align: left; }
 .table td strong { font: 700 18px/1 var(--display); }
 .table td.actions { white-space: nowrap; text-align: right; }
-.table td.actions button + button { margin-left: 4px; }
+.table td.actions button { min-height: 26px; padding: 0 6px; font-size: 12px; }
+.table td.actions button + button { margin-left: 3px; }
 .table td.actions button[aria-pressed='true'] { background: #17231b; color: var(--cream); border-color: #17231b; }
 .table tr.bench td { color: var(--muted); }
 .table tr.bench td .neg { color: var(--bad); }

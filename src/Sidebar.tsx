@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, fmt, type FormationId, type Pos } from './game/data';
+import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, FULL_TIME, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
+  EURO_AFTER, FULL_TIME, MATCH_BONUS_COST, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -174,6 +174,12 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const knockout = week?.kind === 'cup' ? game.cup[week.index] : week?.kind === 'euro' ? game.euro.flatMap((c) => c.rounds[week.index]) : [];
   const tie = knockout.find((t) => t.a.clubId === viewId || t.b.clubId === viewId);
   const opponent = tie && entrantName(game, tie.a.clubId === viewId ? tie.b : tie.a);
+  // Whoever the club meets this week, if it is a league club: its formation is worth knowing before choosing your own.
+  const leagueFixture = week?.kind === 'league' ? game.schedule[week.index].find((f) => f.home === viewId || f.away === viewId) : undefined;
+  const rivalId = leagueFixture ? (leagueFixture.home === viewId ? leagueFixture.away : leagueFixture.home)
+    : tie ? (tie.a.clubId === viewId ? tie.b.clubId : tie.a.clubId) : null;
+  const rival = rivalId != null ? game.clubs[rivalId] : null;
+  const streak = winStreak(game, viewId);
   const squad = [...club.squad].sort((a, b) => POS_ORDER.indexOf(a.pos) - POS_ORDER.indexOf(b.pos) || b.skill - a.skill);
 
   return (
@@ -209,9 +215,19 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           disabled={!canEdit}
           onChange={(e) => dispatch({ type: 'SET_FORMATION', formation: e.target.value as FormationId })}
         >
-          {Object.keys(FORMATIONS).map((f) => <option key={f}>{f}</option>)}
+          {(Object.keys(FORMATIONS) as FormationId[]).map((f) => <option key={f} value={f}>{f} · {STYLE_NAME[FORMATIONS[f].style]}</option>)}
         </select>
-        {club.morale !== 0 && <span className="muted small">{club.morale > 0 ? 'Joukkue on hyvässä vireessä' : 'Joukkue on huonossa vireessä'}</span>}
+        {canEdit && club.morale < 1 && (
+          <button
+            className="tiny"
+            disabled={club.cash < MATCH_BONUS_COST}
+            title="Seuraavassa ottelussa joukkue saa tavallista enemmän maalipaikkoja"
+            onClick={() => dispatch({ type: 'MATCH_BONUS' })}
+          >
+            Lupaa ottelubonus {fmt(MATCH_BONUS_COST)}
+          </button>
+        )}
+        {club.morale !== 0 && <span className={club.morale > 0 ? 'pos small' : 'neg small'}>{club.morale > 0 ? 'Joukkue on hyvässä vireessä seuraavassa ottelussa' : 'Joukkue on huonossa vireessä seuraavassa ottelussa'}</span>}
         {club.surge && <span className="pos small">Seuraavassa sarjaottelussa varma maalipaikka lisäajalla</span>}
       </label>
 
@@ -221,9 +237,15 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             ? <>Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupia'}: vastassa on {opponent}.</>
             : <span className="muted">Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupeja'}. Joukkueesi ei ole mukana, joten pelaajat lepäävät.</span>
         ) : nextHome
-          ? <>Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away)))}.</>
+          ? <>Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}.</>
           : <span className="muted">Seuraava ottelu pelataan vieraissa, joten lipputuloja ei kerry.</span>}
       </p>
+
+      {rival && (
+        <p className="small">
+          Vastustaja {rival.name} pelaa muodostelmalla <strong>{rival.formation}</strong> ({STYLE_NAME[FORMATIONS[rival.formation].style]}).
+        </p>
+      )}
 
       <MiniPitch club={club} />
 
@@ -243,7 +265,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             const slot = starters.get(p.id);
             return (
               <tr key={p.id} className={slot ? '' : 'bench'}>
-                <td><span className={`pos pos-${p.pos}`} title={POS_NAME[p.pos]}>{p.pos}</span></td>
+                <td><span className="badge" title={POS_NAME[p.pos]}>{p.pos}</span></td>
                 <td className="left">{p.name}</td>
                 <td>
                   <strong
@@ -275,10 +297,10 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                     <button
                       className="tiny"
                       aria-pressed={!!p.resting}
-                      title="Lepäävä pelaaja jää pois tämän viikon ottelusta ja saa kolme kuntopistettä"
+                      title="Lepuuta: pelaaja jää pois tämän viikon ottelusta ja saa kolme kuntopistettä"
                       onClick={() => dispatch({ type: 'REST', playerId: p.id })}
                     >
-                      {p.resting ? 'Peru lepo' : 'Lepuuta'}
+                      {p.resting ? 'Peru' : 'Lepo'}
                     </button>
                   )}
                   {canSell && club.squad.length > MIN_SQUAD && (
@@ -293,6 +315,12 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         </tbody>
       </table>
       </div>
+      <p className="muted small">
+        Muodostelmat vastaavat toisiinsa. Hyökkääjiä verrataan vastustajan puolustajiin: mitä enemmän hyökkääjiä
+        suhteessa puolustajiin, sitä parempia maalipaikat ovat, ja kolme hyökkääjää kolmea puolustajaa vastaan on
+        ylivoima. Jokainen keskikenttäpelaaja enemmän kuin vastustajalla tuo lisää maalipaikkoja. Avoin muodostelma
+        lisää maalipaikkoja molemmille, suljettu vähentää: vahvemman kannattaa avata peli, heikomman sulkea se.
+      </p>
       <p className="muted small">
         Avauskokoonpano valitaan automaattisesti taidon mukaan; omalla vuorollasi voit lepuuttaa pelaajan tämän viikon ottelusta. Väärällä paikalla pelaava pelaa puolella teholla.
         Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Cup- ja
