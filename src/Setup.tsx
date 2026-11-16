@@ -7,7 +7,7 @@ const DEFAULT_NAMES = ['Punaiset', 'Siniset', 'Keltaiset', 'Vihreät', 'Violetit
 export default function Setup({ onStart }: { onStart: (config: GameConfig) => void }) {
   const [count, setCount] = useState(2);
   const [names, setNames] = useState(DEFAULT_NAMES);
-  const [seasons, setSeasons] = useState(1);
+  const [seasons, setSeasons] = useState(2);
 
   const start = () =>
     onStart({
@@ -53,7 +53,10 @@ export default function Setup({ onStart }: { onStart: (config: GameConfig) => vo
             </button>
           ))}
         </div>
-        <p className="muted small">Yksi kausi kestää noin 30–45 minuuttia.</p>
+        <p className="muted small">
+          Yksi kausi kestää noin 45–60 minuuttia. Eurocupit pelataan toisesta kaudesta alkaen: niihin pääsevät edellisen
+          kauden neljä parasta.
+        </p>
 
         <button className="primary big" onClick={start}>Aloita peli</button>
       </div>

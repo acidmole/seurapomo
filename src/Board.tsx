@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { BOARD, POS_NAME, SQUARE_INFO, fmt } from './game/data';
 import {
-  MAX_SQUAD, currentClubId, playerValue, trainingCost,
+  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, currentClubId, isBroke, mustSell, playerValue, trainingCost,
   type Action, type GameState, type Player,
 } from './game/engine';
 
@@ -21,7 +21,7 @@ export function PlayerCard({ player, children }: { player: Player; children?: Re
       <span className={`pos pos-${player.pos}`} title={POS_NAME[player.pos]}>{player.pos}</span>
       <div className="player-card-main">
         <strong>{player.name}</strong>
-        <span className="muted small">Taso {player.skill} · arvo {fmt(playerValue(player.skill))}</span>
+        <span className="muted small">Taito {player.skill} · sisu {player.spirit} · arvo {fmt(playerValue(player.skill, player.spirit))}</span>
       </div>
       {children}
     </div>
@@ -98,6 +98,11 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             <span>Korkein tarjous <strong>{fmt(p.bid)}</strong> · {game.clubs[p.leader].name}</span>
           )}
         </div>
+        {p.subsidy && (
+          <p className="muted small">
+            Sponsori maksaa hinnasta {fmt(p.subsidy.amount)}, jos {game.clubs[p.subsidy.club].name} voittaa.
+          </p>
+        )}
         <div className="bidder">
           <span className="dot" style={{ background: bidder.color }} />
           <span>Tarjousvuorossa <strong>{bidder.name}</strong> (kassa {fmt(bidder.cash)})</span>
@@ -127,7 +132,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           <PlayerCard key={o.id} player={o}>
             <button
               className="primary"
-              disabled={full || me.cash < playerValue(o.skill)}
+              disabled={full || me.cash < playerValue(o.skill, o.spirit)}
               onClick={() => dispatch({ type: 'SCOUT_BUY', index: i })}
             >
               Osta
@@ -146,10 +151,10 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             <PlayerCard key={o.id} player={o}>
               <button
                 className="primary"
-                disabled={o.skill >= 10 || me.cash < trainingCost(o)}
+                disabled={o.skill >= MAX_LEVEL || (!p.free && me.cash < trainingCost(o))}
                 onClick={() => dispatch({ type: 'TRAIN', playerId: o.id })}
               >
-                {fmt(trainingCost(o))}
+                {p.free ? 'Ilmainen' : fmt(trainingCost(o))}
               </button>
             </PlayerCard>
           ))}
@@ -158,8 +163,24 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
       </>
     );
   } else {
-    const last = game.turn === game.humans.length - 1;
-    body = (
+    const last = game.order.length === 1;
+    body = isBroke(me) ? (
+      <>
+        <p className="neg">
+          Olet velkaa {fmt(-me.cash)}, eikä myytävää ole: joukkueessa on enää {MIN_SQUAD} pelaajaa. Seura menee
+          konkurssiin, ja putoat pelistä.
+        </p>
+        <button className="danger big" onClick={() => dispatch({ type: 'BANKRUPT' })}>Konkurssi</button>
+      </>
+    ) : mustSell(me) ? (
+      <>
+        <p className="neg">
+          Olet velkaa {fmt(-me.cash)}. Myy pelaajia oikealta, kunnes kassa on plussalla. Jos pelaajia jää alle{' '}
+          {MIN_SQUAD}, putoat pelistä.
+        </p>
+        <button className="primary big" disabled>Lopeta vuoro</button>
+      </>
+    ) : (
       <button className="primary big" onClick={() => dispatch({ type: 'END_TURN' })}>
         {last ? 'Lopeta vuoro ja pelaa kierros' : 'Lopeta vuoro'}
       </button>

@@ -3,21 +3,24 @@ import Board from './Board';
 import { GameOver, MatchdayResults, SeasonEnd } from './Overlays';
 import Setup from './Setup';
 import Sidebar from './Sidebar';
-import { ROUNDS, createGame, currentClubId, reduce, type Action, type GameState } from './game/engine';
+import { ROUNDS, STATE_VERSION, createGame, currentClubId, reduce, type Action, type GameState } from './game/engine';
 
-const SAVE_KEY = 'seurapomo-save-v1';
+const SAVE_KEY = 'seurapomo-save';
 
 function loadGame(): GameState | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? (JSON.parse(raw) as GameState) : null;
+    const saved = raw ? (JSON.parse(raw) as GameState) : null;
+    return saved?.version === STATE_VERSION ? saved : null;
   } catch {
     return null;
   }
 }
 
 export default function App() {
-  const [game, setGame] = useState<GameState | null>(loadGame);
+  const [stored, setGame] = useState<GameState | null>(loadGame);
+  // A game from before a rules change (kept alive by hot reload during development) is dropped, not played.
+  const game = stored?.version === STATE_VERSION ? stored : null;
   const [confirmQuit, setConfirmQuit] = useState(false);
 
   useEffect(() => {
