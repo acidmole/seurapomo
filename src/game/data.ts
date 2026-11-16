@@ -36,18 +36,29 @@ export const BOARD: SquareType[] = [
   'academy', 'training', 'press', 'injury', 'scout', 'press',
 ];
 
-export const SQUARE_INFO: Record<SquareType, { name: string; icon: string; help: string }> = {
-  start: { name: 'Palkkapäivä', icon: '💶', help: 'Maksat palkat aina, kun ohitat tämän ruudun.' },
-  auction: { name: 'Huutokauppa', icon: '🔨', help: 'Valitset kahdesta pelaajasta toisen, ja kaikki managerit huutavat hänestä.' },
-  scout: { name: 'Kykyjenetsijä', icon: '🔭', help: 'Saat ostaa yhden kolmesta pelaajasta listahintaan.' },
-  academy: { name: 'Akatemia', icon: '🌱', help: 'Saat nuoren pelaajan ilmaiseksi.' },
-  training: { name: 'Harjoitusleiri', icon: '🏋️', help: 'Voit nostaa yhden pelaajan tasoa maksua vastaan.' },
-  sponsor: { name: 'Sponsori', icon: '🤝', help: 'Saat rahaa. Summa kasvaa sarjasijoituksen mukana.' },
-  press: { name: 'Lehdistö', icon: '📰', help: 'Nostat kortin. Se voi tuoda tai viedä rahaa, muuttaa pelaajan tasoa, käynnistää huutokaupan tai siirtää sinut toiseen ruutuun.' },
-  injury: { name: 'Lääkäri', icon: '🩹', help: 'Yksi avauskokoonpanon pelaaja loukkaantuu.' },
-  tax: { name: 'Verottaja', icon: '🧾', help: 'Maksat kymmenen prosenttia kassastasi.' },
-  rest: { name: 'Vapaapäivä', icon: '☕', help: 'Mitään ei tapahdu.' },
+const STRIPES = 'repeating-linear-gradient(90deg, #35c9dc 0 12px, #1d3f72 12px 24px)';
+const HOOPS = 'repeating-linear-gradient(0deg, #8be04e 0 10px, #1f7a3a 10px 20px)';
+const SASH = 'repeating-linear-gradient(135deg, #ff5a4d 0 12px, #8f1d16 12px 24px)';
+const QUARTERS = 'conic-gradient(#ff8fc7 0 25%, #ffffff 0 50%, #ff8fc7 0 75%, #ffffff 0)';
+const HALVES = 'linear-gradient(90deg, #ffd23f 0 50%, #f08c00 50% 100%)';
+const PINSTRIPES = 'repeating-linear-gradient(90deg, #0b1a12 0 10px, #ffd23f 10px 13px)';
+
+/** `icon` is an SVG path on a 24 × 24 grid; `pattern` is the shirt pattern behind it, one per group of squares. */
+export const SQUARE_INFO: Record<SquareType, { name: string; icon: string; pattern: string; help: string }> = {
+  start: { name: 'Palkkapäivä', pattern: PINSTRIPES, icon: 'M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0M15 8.5a4.5 4.5 0 1 0 0 7M7 11h6M7 13.5h5', help: 'Maksat palkat aina, kun ohitat tämän ruudun.' },
+  auction: { name: 'Huuto\u00adkauppa', pattern: STRIPES, icon: 'm14 4 6 6M11 7l6 6M12.5 5.5l-5 5 3 3 5-5M9 13l-6 6M13 21h8', help: 'Valitset kahdesta pelaajasta toisen, ja kaikki managerit huutavat hänestä.' },
+  scout: { name: 'Kykyjen\u00adetsijä', pattern: STRIPES, icon: 'M17 11a6 6 0 1 1-12 0a6 6 0 0 1 12 0M20 20l-4.5-4.5', help: 'Saat ostaa yhden kolmesta pelaajasta listahintaan.' },
+  academy: { name: 'Akatemia', pattern: HOOPS, icon: 'm12 3 2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 16.9 6.6 19.8l1.1-6.1L3.2 9.4l6.1-.8z', help: 'Saat nuoren pelaajan ilmaiseksi.' },
+  training: { name: 'Harjoitus\u00adleiri', pattern: HOOPS, icon: 'M12 3 5 20h14zM8.5 12h7M4 20h16', help: 'Voit nostaa yhden pelaajan taitoa maksua vastaan.' },
+  sponsor: { name: 'Sponsori', pattern: HALVES, icon: 'M8 3 3 6l2 4 2-1v11h10V9l2 1 2-4-5-3a4 4 0 0 1-8 0z', help: 'Saat rahaa. Summa kasvaa sarjasijoituksen mukana.' },
+  press: { name: 'Lehdistö', pattern: QUARTERS, icon: 'M3 5h18v14H3zM7 9h5v4H7zM15 9h2M15 13h2M7 16h10', help: 'Nostat kortin. Se voi tuoda tai viedä rahaa, muuttaa pelaajan virettä, käynnistää huutokaupan tai siirtää sinut toiseen ruutuun.' },
+  injury: { name: 'Lääkäri', pattern: SASH, icon: 'M4 4h16v16H4zM12 8v8M8 12h8', help: 'Yksi avauskokoonpanon pelaaja loukkaantuu.' },
+  tax: { name: 'Verottaja', pattern: SASH, icon: 'M10 7.5a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0M19 16.5a2.5 2.5 0 1 1-5 0a2.5 2.5 0 0 1 5 0M19 5 5 19', help: 'Maksat kymmenen prosenttia kassastasi.' },
+  rest: { name: 'Vapaa\u00adpäivä', pattern: QUARTERS, icon: 'M5 9h11v5a5 5 0 0 1-10 0zM16 10h2a2 2 0 0 1 0 4h-2M5 20h12', help: 'Mitään ei tapahdu.' },
 };
+
+/** Shirt pattern shown behind a player of each position. */
+export const POS_PATTERN: Record<Pos, string> = { MV: HALVES, PU: STRIPES, KK: HOOPS, HY: SASH };
 
 export type Card =
   | { kind: 'cash'; amount: number; text: string }
@@ -106,15 +117,37 @@ export const CARDS: Card[] = [
 ];
 
 export const FIRST_NAMES = [
-  'Aleksi', 'Eero', 'Joonas', 'Mikael', 'Onni', 'Väinö', 'Elias', 'Leo', 'Niilo', 'Otto', 'Rasmus', 'Santeri',
-  'Tuomas', 'Ville', 'Antti', 'Juho', 'Lauri', 'Matias', 'Oskari', 'Perttu', 'Samu', 'Topi', 'Aaro', 'Kasper',
+  'Aapo', 'Akseli', 'Aleksi', 'Anssi', 'Antero', 'Arttu', 'Benjamin', 'Eemeli', 'Eero', 'Eetu', 'Elias', 'Erkki',
+  'Hannes', 'Heikki', 'Henri', 'Iiro', 'Ilmari', 'Jaakko', 'Jalmari', 'Jere', 'Joonas', 'Juho', 'Kaapo', 'Kalle',
+  'Kasper', 'Konsta', 'Lauri', 'Leevi', 'Luukas', 'Markus', 'Matias', 'Miro', 'Niilo', 'Niklas', 'Oiva', 'Olli',
+  'Onni', 'Oskari', 'Otto', 'Paavo', 'Pekka', 'Perttu', 'Petteri', 'Rasmus', 'Reino', 'Riku', 'Roope', 'Saku',
+  'Santeri', 'Sakari', 'Teemu', 'Timo', 'Toivo', 'Topias', 'Tuomas', 'Urho', 'Valtteri', 'Veeti', 'Ville', 'Väinö',
 ];
 
 export const LAST_NAMES = [
-  'Koskela', 'Lahtinen', 'Mäkelä', 'Niemi', 'Rantala', 'Salonen', 'Heikkilä', 'Karjalainen', 'Laine', 'Manninen',
-  'Ojala', 'Peltola', 'Räsänen', 'Saarinen', 'Turunen', 'Vainio', 'Aaltonen', 'Hakala', 'Jokinen', 'Kallio',
-  'Lehto', 'Nurmi', 'Pesonen', 'Suominen', 'Tanskanen', 'Uotila', 'Ylönen', 'Harju',
+  'Aaltonen', 'Ahonen', 'Alanko', 'Backman', 'Eskola', 'Forsman', 'Haapala', 'Hakala', 'Halme', 'Harju',
+  'Heikkilä', 'Hietala', 'Hiltunen', 'Honkanen', 'Huttunen', 'Hällström', 'Ikonen', 'Jokela', 'Kallio', 'Kangas',
+  'Karjalainen', 'Kettunen', 'Kivelä', 'Koivisto', 'Kokkonen', 'Korpela', 'Koskela', 'Kuoppala', 'Kuusela',
+  'Kärkkäinen', 'Laaksonen', 'Lahtinen', 'Laine', 'Lampinen', 'Lehto', 'Leinonen', 'Lindroos', 'Luoma',
+  'Manninen', 'Mattila', 'Mustonen', 'Myllymäki', 'Mäkelä', 'Määttä', 'Niemi', 'Nurmi', 'Nyberg', 'Ojala',
+  'Ollila', 'Paananen', 'Pakarinen', 'Palo', 'Peltola', 'Pesonen', 'Pitkänen', 'Pulkkinen', 'Rantala',
+  'Rautakorpi', 'Rautio', 'Räsänen', 'Saarinen', 'Salminen', 'Salo', 'Savolainen', 'Seppälä', 'Sillanpää',
+  'Sirola', 'Soini', 'Sundqvist', 'Suominen', 'Tanskanen', 'Tervo', 'Tiihonen', 'Toivonen', 'Tuominen',
+  'Turunen', 'Uotila', 'Vainio', 'Valkama', 'Vesala', 'Viitala', 'Virtanen', 'Vuorinen', 'Väisänen',
+  'Wikström', 'Ylönen', 'Åkerlund', 'Öhman',
 ];
+
+/** Invented players from abroad; roughly one signing in seven is one of these. */
+export const FOREIGN_NAMES = [
+  'Mateo Ferrández', 'Lars Øverby', 'Kwame Asante', 'Dragan Petrović', 'Hugo Lindqvist', 'Tiago Nogueira',
+  'Emeka Okafor', 'Kenji Morita', 'Luca Benedetti', 'Jonas Hoffmann', 'Ibrahim Diallo', 'Andrei Popescu',
+  'Sven Halvorsen', 'Rafael Quintero', 'Mikkel Dahl', 'Olivier Marchand', 'Piotr Zielonka', 'Babajide Adeyemi',
+  'Carlos Mendieta', 'Erik Sandström', 'Nikola Vuković', 'Jamal Whitfield', 'Sergei Antonov', 'Tomás Herrero',
+  'Declan Byrne', 'Abdi Warsame', 'Goran Ilić', 'Kwabena Ofori', 'Henrik Aaberg', 'Marco Bellini', 'Samir Haddad',
+  'Viktor Lindahl', 'Arjen Dekker', 'Florian Krause', 'Oleksandr Bondar', 'Ricardo Faria', 'Callum Reid',
+  'Mamadou Sissoko', 'Javier Olmedo', 'Tarik Begović',
+];
+export const FOREIGN_SHARE = 0.15;
 
 export const AI_CLUB_NAMES = [
   'Koskenrannan Pallo',
@@ -156,7 +189,22 @@ export const EURO_ROUND_NAMES = ['Puolivälierät', 'Välierät', 'Loppuottelu']
 
 export const HUMAN_COLORS = ['#e5484d', '#3e8ef7', '#f5a524', '#30a46c', '#a25ddc', '#12b5b0'];
 
-export const CUP_ROUND_NAMES = ['Alkukierros', 'Puolivälierät', 'Välierät', 'Loppuottelu'];
+export const CUP_ROUND_NAMES = ['1. kierros', 'Neljännesvälierät', 'Puolivälierät', 'Välierät', 'Loppuottelu'];
+
+/** Invented lower-division clubs. They only appear in the cup, and are weaker than the league clubs. */
+export const LOWER_CLUBS = [
+  'Kaislarannan Kisa', 'Pihlajamäen Pyry', 'Suokylän Sisu', 'FC Kivikko', 'Ahvenlahden Vesa', 'Hirvikorven Tarmo',
+  'Käpylammen Ponsi', 'Mustikkamäen Into', 'Rantakylän Riento', 'Lumikorven Jyry', 'Tervasaaren Teräs',
+  'Niittylän Nasta', 'Louhikon Lukko', 'Tammiston Tuisku', 'Vaahterapuron Veto', 'Kuusiston Kunto',
+  'Hietaniemen Haka', 'Sorsalammen Sirkat', 'Kalliokylän Karhut', 'Peltosaaren Pallo', 'Ruosteojan Rauta',
+  'Honkarannan Henki', 'Ukkosvuoren Ukot', 'Lokkikallion Leisku',
+];
+export const CUP_SIZE = 32;
+/**
+ * Average player level of the clubs below the league, [min, max], by division: half of them play in the
+ * second division and half in the third. League starters average about 5.
+ */
+export const LOWER_LEVELS: Record<2 | 3, [number, number]> = { 2: [2.5, 4.5], 3: [1.5, 3.5] };
 
 /** Money is stored in thousands of euros. */
 export function fmt(n: number): string {

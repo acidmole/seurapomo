@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
-import { CupTies, ClubName, EuroTies, FixtureList, Standings } from './Sidebar';
-import { CUP_ROUND_NAMES, EURO_COMPS, fmt } from './game/data';
-import { ROUNDS, finalScore, type GameState } from './game/engine';
+import { ClubName, EuroTies, FixtureList, Standings, Ties } from './Sidebar';
+import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, fmt } from './game/data';
+import { finalScore, type GameState } from './game/engine';
 
 function Overlay({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="overlay">
-      <div className="card modal">
-        <h2>{title}</h2>
+      <div className="paper modal">
+        <h2 className="display">{title}</h2>
         {children}
       </div>
     </div>
@@ -16,18 +16,21 @@ function Overlay({ title, children }: { title: string; children: ReactNode }) {
 
 export function MatchdayResults({ game, onContinue }: { game: GameState; onContinue: () => void }) {
   const r = game.results!;
-  const last = r.round === ROUNDS - 1;
-  const gates = game.schedule[r.round].filter((f) => game.clubs[f.home].human && f.gate != null);
+  const last = game.week === game.calendar.length - 1;
+  const fixtures = r.kind === 'league' ? game.schedule[r.index] : [];
+  const gates = fixtures.filter((f) => game.clubs[f.home].human && f.gate != null);
+  const title =
+    r.kind === 'league' ? `Kierroksen ${r.index + 1} tulokset`
+    : r.kind === 'cup' ? `Cup: ${CUP_ROUND_NAMES[r.index].toLowerCase()}`
+    : `Eurocupit: ${EURO_ROUND_NAMES[r.index].toLowerCase()}`;
   return (
-    <Overlay title={`Kierroksen ${r.round + 1} tulokset`}>
-      <FixtureList game={game} fixtures={game.schedule[r.round]} />
-      {r.cupRound !== null && (
-        <>
-          <h3>Cup: {CUP_ROUND_NAMES[r.cupRound].toLowerCase()}</h3>
-          <CupTies game={game} ties={game.cup[r.cupRound]} />
-        </>
+    <Overlay title={title}>
+      {r.kind === 'league' && <FixtureList game={game} fixtures={fixtures} />}
+      {r.kind === 'cup' && <Ties game={game} ties={game.cup[r.index]} />}
+      {r.kind === 'euro' && game.euro.map((comp) => <EuroTies key={comp.tier} game={game} comp={comp} round={r.index} />)}
+      {r.kind !== 'league' && (
+        <p className="muted small">Joukkueet, joilla ei ollut ottelua tällä viikolla, lepäsivät: niiden pelaajien kunto palautui.</p>
       )}
-      {r.euroRound !== null && game.euro.map((comp) => <EuroTies key={comp.tier} game={game} comp={comp} round={r.euroRound!} />)}
       {gates.length > 0 && (
         <>
           <h3>Kotiotteluiden lipputulot</h3>
@@ -38,9 +41,13 @@ export function MatchdayResults({ game, onContinue }: { game: GameState; onConti
           </div>
         </>
       )}
-      <h3>Sarjataulukko</h3>
-      <Standings game={game} />
-      <button className="primary big" onClick={onContinue}>{last ? 'Kauden päätös' : 'Seuraava kierros'}</button>
+      {r.kind === 'league' && (
+        <>
+          <h3>Sarjataulukko</h3>
+          <Standings game={game} />
+        </>
+      )}
+      <button className="primary big" onClick={onContinue}>{last ? 'Kauden päätös' : 'Seuraava viikko'}</button>
     </Overlay>
   );
 }
@@ -73,7 +80,7 @@ export function SeasonEnd({ game, onContinue }: { game: GameState; onContinue: (
 export function GameOver({ game, onNewGame }: { game: GameState; onNewGame: () => void }) {
   const ranking = game.humans.map((id) => game.clubs[id]).sort((a, b) => finalScore(b) - finalScore(a) || b.cash - a.cash);
   return (
-    <Overlay title={ranking.length ? `🏆 ${ranking[0].name} voittaa` : 'Kaikki managerit menivät konkurssiin'}>
+    <Overlay title={ranking.length ? `${ranking[0].name} voittaa` : 'Kaikki managerit menivät konkurssiin'}>
       <p className="muted">
         Pisteitä saa sarjasijoituksista, cupista ja eurocupeista. Lisäksi jokainen täysi 100 000 € kassassa on yhden pisteen arvoinen,
         ja velkaantunut manageri joutuu myymään pelaajiaan.

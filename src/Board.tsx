@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { BOARD, POS_NAME, SQUARE_INFO, fmt } from './game/data';
+import { BOARD, SQUARE_INFO, fmt } from './game/data';
 import {
   MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, currentClubId, isBroke, mustSell, playerValue, trainingCost,
-  type Action, type GameState, type Player,
+  type Action, type GameState,
 } from './game/engine';
+import { Die, Icon, PlayerCard } from './ui';
 
 type Dispatch = (action: Action) => void;
 
@@ -13,19 +14,6 @@ function cell(i: number): { gridRow: number; gridColumn: number } {
   if (i <= 12) return { gridRow: i - 5, gridColumn: 7 };
   if (i <= 18) return { gridRow: 7, gridColumn: 19 - i };
   return { gridRow: 25 - i, gridColumn: 1 };
-}
-
-export function PlayerCard({ player, children }: { player: Player; children?: ReactNode }) {
-  return (
-    <div className="player-card">
-      <span className={`pos pos-${player.pos}`} title={POS_NAME[player.pos]}>{player.pos}</span>
-      <div className="player-card-main">
-        <strong>{player.name}</strong>
-        <span className="muted small">Taito {player.skill} · sisu {player.spirit} · arvo {fmt(playerValue(player.skill, player.spirit))}</span>
-      </div>
-      {children}
-    </div>
-  );
 }
 
 function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
@@ -38,11 +26,11 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     <div className="turn-heading">
       <span className="dot big" style={{ background: me.color }} />
       <div>
-        <div className="muted small">Vuorossa</div>
-        <strong>{me.name}</strong>
+        <div className="label">Vuorossa</div>
+        <strong className="display">{me.name}</strong>
       </div>
       <div className="spacer" />
-      <div className="cash">{fmt(me.cash)}</div>
+      <div className={me.cash < 0 ? 'cash neg' : 'cash'}>{fmt(me.cash)}</div>
     </div>
   );
 
@@ -52,7 +40,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         {heading}
         <div className="center-body centered">
           <p className="muted">Voit vaihtaa muodostelmaa tai myydä pelaajia oikealta ennen heittoa.</p>
-          <button className="primary big" onClick={() => dispatch({ type: 'ROLL' })}>🎲 Heitä noppaa</button>
+          <button className="primary big" onClick={() => dispatch({ type: 'ROLL' })}>Heitä noppaa</button>
         </div>
       </>
     );
@@ -62,9 +50,9 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const notice = (
     <div className="notice">
       <div className="notice-head">
-        <span className="die">{String.fromCodePoint(0x2680 + (game.die ?? 1) - 1)}</span>
+        <Die value={game.die ?? 1} />
         <div>
-          <strong>{square?.icon} {square?.name}</strong>
+          <strong className="display">{square?.name}</strong>
           <div className="muted small">{square?.help}</div>
         </div>
       </div>
@@ -107,7 +95,8 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           <span className="dot" style={{ background: bidder.color }} />
           <span>Tarjousvuorossa <strong>{bidder.name}</strong> (kassa {fmt(bidder.cash)})</span>
         </div>
-        {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa), joten et voi tarjota.</p>}
+        {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat tarjota.</p>}
+        {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia oikealta ja tarjota sitten.</p>}
         <div className="row">
           {[0, 5, 20, 45].map((extra) => (
             <button
@@ -127,7 +116,8 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     body = (
       <>
         <p>Kykyjenetsijä ehdottaa kolmea pelaajaa. Voit ostaa yhden.</p>
-        {full && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin joku toisella vuorolla.</p>}
+        {full && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat ostaa.</p>}
+        {!full && <p className="muted small">Jos kassa ei riitä, voit myydä pelaajia oikealta ja ostaa sitten.</p>}
         {p.options.map((o, i) => (
           <PlayerCard key={o.id} player={o}>
             <button
@@ -145,7 +135,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   } else if (p?.kind === 'training') {
     body = (
       <>
-        <p>Valitse pelaaja leirille. Taso nousee yhdellä.</p>
+        <p>Valitse pelaaja leirille. Taito nousee yhdellä.</p>
         <div className="scroll-list">
           {[...me.squad].sort((a, b) => b.skill - a.skill).map((o) => (
             <PlayerCard key={o.id} player={o}>
@@ -201,29 +191,42 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
 export default function Board({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const humans = game.humans.map((id) => game.clubs[id]);
   const currentId = currentClubId(game);
+  const currentPos = game.clubs[currentId]?.human ? game.clubs[currentId].boardPos : -1;
   return (
-    <section className="board">
+    <section className="board" aria-label="Pelilauta">
       {BOARD.map((type, i) => {
         const info = SQUARE_INFO[type];
         return (
-          <div key={i} className={`square square-${type}`} style={cell(i)} title={info.help}>
-            <span className="square-icon">{info.icon}</span>
-            <span className="square-name">{info.name}</span>
-            <div className="tokens">
-              {humans.filter((c) => c.boardPos === i).map((c) => (
-                <span
-                  key={c.id}
-                  className={`token ${c.id === currentId ? 'token-current' : ''}`}
-                  style={{ background: c.color }}
-                  title={c.name}
-                />
-              ))}
+          <div key={i} className={i === currentPos ? 'sticker sticker-current' : 'sticker'} style={cell(i)} title={info.help}>
+            <div className="sticker-field" style={{ background: info.pattern }}>
+              <span className="sticker-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+              <span className="emblem"><Icon path={info.icon} /></span>
+              <div className="tokens">
+                {humans.filter((c) => c.boardPos === i).map((c) => (
+                  <span
+                    key={c.id}
+                    role="img"
+                    aria-label={c.name}
+                    className={c.id === currentId ? 'token token-current' : 'token'}
+                    style={{ background: c.color }}
+                    title={c.name}
+                  />
+                ))}
+              </div>
             </div>
+            <div className="sticker-name">{info.name}</div>
           </div>
         );
       })}
-      <div className="center card">
-        <Center game={game} dispatch={dispatch} />
+      <div className="pitch">
+        <div className="pitch-line pitch-edge" aria-hidden="true" />
+        <div className="pitch-line pitch-halfway" aria-hidden="true" />
+        <div className="pitch-line pitch-circle" aria-hidden="true" />
+        <div className="pitch-line pitch-box pitch-box-left" aria-hidden="true" />
+        <div className="pitch-line pitch-box pitch-box-right" aria-hidden="true" />
+        <div className="scoreboard">
+          <Center game={game} dispatch={dispatch} />
+        </div>
       </div>
     </section>
   );

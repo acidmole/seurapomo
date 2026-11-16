@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, ROUNDS, currentClubId, finalScore, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, MIN_SQUAD, TIRED_AT, level, type Action, type CupTie, type EuroComp, type EuroEntrant, type Fixture, type GameState,
+  EURO_AFTER, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -57,78 +57,118 @@ export function FixtureList({ game, fixtures }: { game: GameState; fixtures: Fix
   );
 }
 
-export function CupTies({ game, ties }: { game: GameState; ties: CupTie[] }) {
+function EntrantName({ game, entrant }: { game: GameState; entrant: Entrant }) {
+  if (entrant.clubId !== null) return <ClubName game={game} id={entrant.clubId} />;
+  return (
+    <span className="club">
+      {entrant.name}
+      {entrant.division && <span className="muted small" title={`${entrant.division}. divisioona`}>{entrant.division}. div.</span>}
+    </span>
+  );
+}
+
+const hasLeagueClub = (t: Tie) => t.a.clubId !== null || t.b.clubId !== null;
+
+/** One knockout round. Ties between two clubs from outside the league are left out while any league club is still in. */
+export function Ties({ game, ties }: { game: GameState; ties: Tie[] }) {
+  const shown = ties.some(hasLeagueClub) ? ties.filter(hasLeagueClub) : ties;
   return (
     <div className="fixtures">
-      {ties.map((t, i) => (
+      {shown.map((t, i) => (
         <div key={i} className="fixture">
-          <span className={`right ${t.winner === t.a ? 'winner' : ''}`}><ClubName game={game} id={t.a} /></span>
-          <span className="score">{t.ag === null ? '–' : `${t.ag}–${t.bg}${t.pens ? ' rp.' : ''}`}</span>
-          <span className={t.winner === t.b ? 'winner' : ''}><ClubName game={game} id={t.b} /></span>
+          <span className={`right ${t.winner === 'a' ? 'winner' : ''}`}><EntrantName game={game} entrant={t.a} /></span>
+          <span className="score">{t.ag === null ? '–' : `${t.ag}–${t.bg}`}</span>
+          <span className={t.winner === 'b' ? 'winner' : ''}><EntrantName game={game} entrant={t.b} /></span>
+          {t.pens && <span className="chances muted small">Ratkesi rangaistuspotkuilla</span>}
         </div>
       ))}
     </div>
   );
 }
 
-function Entrant({ game, entrant }: { game: GameState; entrant: EuroEntrant }) {
-  return entrant.clubId === null ? <span className="club">{entrant.name}</span> : <ClubName game={game} id={entrant.clubId} />;
-}
-
-/** One round of a European cup. Ties between two foreign clubs are left out before the final. */
+/** One round of a European cup; skipped once no league club is left in it, except for the final. */
 export function EuroTies({ game, comp, round }: { game: GameState; comp: EuroComp; round: number }) {
-  const all = comp.rounds[round];
-  const ties = all.length === 1 ? all : all.filter((t) => t.a.clubId !== null || t.b.clubId !== null);
-  if (ties.length === 0) return null;
+  const ties = comp.rounds[round];
+  if (ties.length > 1 && !ties.some(hasLeagueClub)) return null;
   return (
     <>
       <h3>{EURO_COMPS[comp.tier].name}: {EURO_ROUND_NAMES[round].toLowerCase()}</h3>
-      <div className="fixtures">
-        {ties.map((t, i) => (
-          <div key={i} className="fixture">
-            <span className={`right ${t.winner === 'a' ? 'winner' : ''}`}><Entrant game={game} entrant={t.a} /></span>
-            <span className="score">{t.ag === null ? '–' : `${t.ag}–${t.bg}${t.pens ? ' rp.' : ''}`}</span>
-            <span className={t.winner === 'b' ? 'winner' : ''}><Entrant game={game} entrant={t.b} /></span>
-          </div>
-        ))}
-      </div>
+      <Ties game={game} ties={ties} />
     </>
+  );
+}
+
+/** The starting eleven laid out on a small pitch, keeper on the left. */
+function MiniPitch({ club }: { club: Club }) {
+  const { slots } = lineup(club);
+  const rows: [Pos, number][] = [['MV', 8], ['PU', 28], ['KK', 55], ['HY', 80]];
+  return (
+    <div className="mini-pitch" role="img" aria-label={`Avauskokoonpano muodostelmassa ${club.formation}`}>
+      <div className="pitch-line pitch-edge" />
+      <div className="pitch-line pitch-halfway" />
+      <div className="pitch-line pitch-box pitch-box-left" />
+      <div className="pitch-line pitch-box pitch-box-right" />
+      {rows.flatMap(([pos, x]) => {
+        const line = slots.filter((s) => s.pos === pos);
+        return line.map((s, i) => (
+          <span
+            key={`${pos}${i}`}
+            className={`spot ${pos === 'MV' ? 'spot-keeper' : ''} ${!s.player ? 'spot-empty' : s.player.pos !== pos ? 'spot-makeshift' : ''}`}
+            style={{ left: `${x}%`, top: `${((i + 1) / (line.length + 1)) * 100}%` }}
+            title={s.player ? s.player.name : 'Tyhjä paikka'}
+          >
+            {s.player ? s.eff : '–'}
+          </span>
+        ));
+      })}
+    </div>
   );
 }
 
 function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const currentId = currentClubId(game);
-  const [viewId, setViewId] = useState(currentId);
+  const actingId = actingClubId(game);
+  const [viewId, setViewId] = useState(actingId);
   const club = game.clubs[viewId];
   const canEdit = viewId === currentId && (game.phase === 'roll' || game.phase === 'manage') && !game.pending;
+  const canSell = viewId === actingId && (game.phase === 'roll' || game.phase === 'manage');
   const xi = lineup(club);
   const starters = new Map(xi.slots.flatMap((s) => (s.player ? [[s.player.id, s] as const] : [])));
-  const nextHome = game.round < ROUNDS ? game.schedule[game.round].find((f) => f.home === viewId) : undefined;
+  const week = thisWeek(game);
+  const nextHome = week?.kind === 'league' ? game.schedule[week.index].find((f) => f.home === viewId) : undefined;
+  const knockout = week?.kind === 'cup' ? game.cup[week.index] : week?.kind === 'euro' ? game.euro.flatMap((c) => c.rounds[week.index]) : [];
+  const tie = knockout.find((t) => t.a.clubId === viewId || t.b.clubId === viewId);
+  const opponent = tie && entrantName(game, tie.a.clubId === viewId ? tie.b : tie.a);
   const squad = [...club.squad].sort((a, b) => POS_ORDER.indexOf(a.pos) - POS_ORDER.indexOf(b.pos) || b.skill - a.skill);
 
   return (
     <>
-      <div className="chips">
-        {game.humans.map((id) => (
-          <button key={id} className={id === viewId ? 'chip active' : 'chip'} onClick={() => setViewId(id)}>
-            <span className="dot" style={{ background: game.clubs[id].color }} />
-            {game.clubs[id].name}
-          </button>
-        ))}
+      <div className="sheet-head">
+        <h2 className="display">{club.name}</h2>
+        <span className="muted">Sarjassa {position(game, viewId)}. · {finalScore(club)} {finalScore(club) === 1 ? 'piste' : 'pistettä'}</span>
       </div>
+      {game.humans.length > 1 && (
+        <div className="chips">
+          {game.humans.map((id) => (
+            <button key={id} className={id === viewId ? 'chip active' : 'chip'} onClick={() => setViewId(id)}>
+              <span className="dot" style={{ background: game.clubs[id].color }} />
+              {game.clubs[id].name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="stats">
-        <div><span className="muted small">Kassa</span><strong className={club.cash < 0 ? 'neg' : ''}>{fmt(club.cash)}</strong></div>
-        <div><span className="muted small">Palkat</span><strong>{fmt(wages(club))}</strong></div>
-        <div><span className="muted small">Hyökkäys</span><strong>{xi.att}</strong></div>
-        <div><span className="muted small">Keskikenttä</span><strong>{xi.mid}</strong></div>
-        <div><span className="muted small">Puolustus</span><strong>{xi.def + xi.gk}</strong></div>
-        <div><span className="muted small">Sisu</span><strong>{xi.spirit.toLocaleString('fi-FI', { maximumFractionDigits: 1 })}</strong></div>
-        <div><span className="muted small">Pisteet</span><strong>{finalScore(club)}</strong></div>
+        <div><span className="label">Kassa</span><strong className={club.cash < 0 ? 'neg' : ''}>{fmt(club.cash)}</strong></div>
+        <div><span className="label">Palkat</span><strong>{fmt(wages(club))}</strong></div>
+        <div><span className="label">Hyökkäys</span><strong>{xi.att}</strong></div>
+        <div><span className="label">Keskikenttä</span><strong>{xi.mid}</strong></div>
+        <div><span className="label">Puolustus</span><strong>{xi.def + xi.gk}</strong></div>
+        <div><span className="label">Sisu</span><strong>{xi.spirit.toLocaleString('fi-FI', { maximumFractionDigits: 1 })}</strong></div>
       </div>
 
       <label className="formation">
-        Muodostelma
+        <span className="label">Muodostelma</span>
         <select
           value={club.formation}
           disabled={!canEdit}
@@ -136,15 +176,22 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         >
           {Object.keys(FORMATIONS).map((f) => <option key={f}>{f}</option>)}
         </select>
-        {club.morale !== 0 && <span className="muted small">{club.morale > 0 ? '🔥 Joukkue on hyvässä vireessä' : '🌧️ Joukkue on huonossa vireessä'}</span>}
+        {club.morale !== 0 && <span className="muted small">{club.morale > 0 ? 'Joukkue on hyvässä vireessä' : 'Joukkue on huonossa vireessä'}</span>}
       </label>
 
       <p className="small">
-        {nextHome
-          ? <>🏟️ Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away)))}.</>
-          : <span className="muted">🚌 Seuraava ottelu pelataan vieraissa, joten lipputuloja ei kerry.</span>}
+        {week?.kind === 'cup' || week?.kind === 'euro' ? (
+          opponent
+            ? <>Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupia'}: vastassa on {opponent}.</>
+            : <span className="muted">Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupeja'}. Joukkueesi ei ole mukana, joten pelaajat lepäävät.</span>
+        ) : nextHome
+          ? <>Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away)))}.</>
+          : <span className="muted">Seuraava ottelu pelataan vieraissa, joten lipputuloja ei kerry.</span>}
       </p>
 
+      <MiniPitch club={club} />
+
+      <div className="table-scroll">
       <table className="table squad">
         <thead>
           <tr>
@@ -174,7 +221,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                 <td>{p.spirit}</td>
                 <td className="left small">
                   {p.out > 0
-                    ? `${p.outReason === 'ban' ? '🟥 Pelikielto' : '🩹 Loukkaantunut'} (${p.out})`
+                    ? <span className="neg">{p.outReason === 'ban' ? 'Pelikielto' : 'Loukkaantunut'}, {p.out} ott.</span>
                     : slot
                       ? slot.pos === p.pos ? 'Avaus' : `Avaus: ${slot.pos}, teho ${slot.eff}`
                       : 'Vaihdossa'}
@@ -186,7 +233,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                   )}
                 </td>
                 <td>
-                  {canEdit && club.squad.length > MIN_SQUAD && (
+                  {canSell && club.squad.length > MIN_SQUAD && (
                     <button className="tiny" title="Myy pelaaja pankille" onClick={() => dispatch({ type: 'SELL', playerId: p.id })}>
                       Myy {fmt(sellPrice(p))}
                     </button>
@@ -197,10 +244,11 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           })}
         </tbody>
       </table>
+      </div>
       <p className="muted small">
         Avauskokoonpano valitaan automaattisesti taidon mukaan. Väärällä paikalla pelaava pelaa puolella teholla.
-        Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Viikko, jolla
-        pelataan myös cupia tai eurocupia, siis kuluttaa: pelaaja palautuu vasta, kun hän lepää yhden kierroksen. Kun
+        Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Cup- ja
+        eurocupviikot siis kuluttavat: pelaaja palautuu vasta, kun hän lepää yhden ottelun. Kun
         kunto on enintään {TIRED_AT}, taito laskee yhdellä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,
         altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa.
       </p>
@@ -215,7 +263,7 @@ export default function Sidebar({ game, dispatch }: { game: GameState; dispatch:
   const cupPlayed = nextCup.every((t) => t.winner !== null);
 
   return (
-    <aside className="sidebar card">
+    <aside className="sidebar paper" aria-label="Joukkue">
       <nav className="tabs">
         {TABS.map(([id, label]) => (
           <button key={id} className={id === tab ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>
@@ -236,7 +284,7 @@ export default function Sidebar({ game, dispatch }: { game: GameState; dispatch:
             )}
             <h3>Cup: {CUP_ROUND_NAMES[game.cup.length - 1].toLowerCase()}</h3>
             {!cupPlayed && <p className="muted small">Pelataan kierroksen {CUP_AFTER[game.cup.length - 1] + 1} jälkeen.</p>}
-            <CupTies game={game} ties={nextCup} />
+            <Ties game={game} ties={nextCup} />
             {game.euro.length === 0 ? (
               <p className="muted small">
                 Eurocupit alkavat toisella kaudella. Mestari pääsee kilpailuun {EURO_COMPS[0].name}, kakkonen

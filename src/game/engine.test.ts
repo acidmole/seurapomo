@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD, CARDS, EURO_COMPS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
+import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import {
-  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -50,6 +50,20 @@ function playOut(s: GameState): GameState {
   }
   return s;
 }
+
+describe('names', () => {
+  it('gives every player in a club a different first and last name, with a few foreigners in the league', () => {
+    const s = newGame(2, 1, 21);
+    for (const c of s.clubs) {
+      const finnish = c.squad.map((p) => p.name).filter((n) => !FOREIGN_NAMES.includes(n));
+      expect(new Set(finnish.map((n) => n.split(' ')[1])).size).toBe(finnish.length);
+      expect(new Set(c.squad.map((p) => p.name)).size).toBe(c.squad.length);
+    }
+    const foreign = s.clubs.flatMap((c) => c.squad).filter((p) => FOREIGN_NAMES.includes(p.name)).length;
+    expect(foreign).toBeGreaterThan(5);
+    expect(foreign).toBeLessThan(45);
+  });
+});
 
 describe('schedule', () => {
   it('is a double round robin', () => {
@@ -214,6 +228,27 @@ describe('debt', () => {
     expect(currentClubId(reduce(s, { type: 'END_TURN' }))).not.toBe(me);
   });
 
+  it('lets a manager sell in the middle of an offer to raise the money', () => {
+    let s = playCardNow(newGame(2, 1, 9), CARDS.findIndex((c) => c.kind === 'auction'));
+    if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
+    const bidder = s.clubs[s.pending.active[s.pending.idx]];
+    bidder.cash = 0;
+    const min = s.pending.minBid;
+    expect(reduce(s, { type: 'BID', amount: min })).toBe(s);
+    const sold = [...bidder.squad].sort((a, b) => b.skill - a.skill).slice(0, 3);
+    for (const p of sold) s = reduce(s, { type: 'SELL', playerId: p.id });
+    expect(s.pending?.kind).toBe('auction');
+    expect(s.clubs[bidder.id].squad).toHaveLength(bidder.squad.length - 3);
+    const after = reduce(s, { type: 'BID', amount: min });
+    expect(after.pending?.kind === 'auction' && after.pending.leader).toBe(bidder.id);
+
+    let scout = playCardNow(newGame(2, 1, 9), CARDS.findIndex((c) => c.kind === 'goto' && c.square === 'scout'));
+    const me = scout.clubs[currentClubId(scout)];
+    scout = reduce(scout, { type: 'SELL', playerId: me.squad[0].id });
+    expect(scout.pending?.kind).toBe('scout');
+    expect(scout.clubs[me.id].squad).toHaveLength(me.squad.length - 1);
+  });
+
   it('never lets a squad be sold below eleven', () => {
     const s = inDebt(2, MIN_SQUAD);
     expect(reduce(s, { type: 'SELL', playerId: s.clubs[currentClubId(s)].squad[0].id })).toBe(s);
@@ -266,9 +301,9 @@ describe('fitness and sisu', () => {
     expect(stillThere.some((p) => p.fitness === 5)).toBe(true);
     expect(s.clubs[0].squad.some((p) => !starters.has(p.id) && p.fitness === 8)).toBe(true);
 
-    // Round 2 is followed by the cup's preliminary round: clubs in it play twice that week.
-    while (s.round < 1 || s.phase !== 'matchday') s = reduce(s, bot(s));
-    const inCup = s.cup[0].flatMap((t) => [t.a, t.b]);
+    // Round 2 is followed by the cup's first round: every league club plays twice that week.
+    while (s.results?.kind !== 'cup') s = reduce(s, bot(s));
+    const inCup = s.cup[0].flatMap((t) => [t.a.clubId, t.b.clubId]);
     expect(s.clubs.filter((c) => inCup.includes(c.id)).every((c) => c.squad.some((p) => p.fitness <= 6))).toBe(true);
   });
 
@@ -301,20 +336,72 @@ describe('lineup', () => {
   });
 });
 
+describe('calendar', () => {
+  it('gives every cup and European round a week of its own', () => {
+    let s = newGame(2, 1, 5);
+    for (const id of s.humans) s.clubs[id].cash = 5000; // nobody goes bankrupt before the season is over
+    expect(s.calendar.filter((w) => w.kind === 'league')).toHaveLength(ROUNDS);
+    expect(s.calendar.filter((w) => w.kind === 'cup').map((w) => w.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(s.calendar.filter((w) => w.kind === 'euro').map((w) => w.index)).toEqual([0, 1, 2]);
+
+    const seen: string[] = [];
+    while (s.phase !== 'seasonEnd') {
+      if (s.phase === 'matchday' && s.results) {
+        seen.push(s.results.kind);
+        // Managers take a turn before every week's matches, and a cup week leaves the league table alone.
+        if (s.results.kind !== 'league') expect(table(s).every((r) => r.p === s.round)).toBe(true);
+      }
+      s = reduce(s, bot(s));
+    }
+    expect(seen).toHaveLength(ROUNDS + 5 + 3);
+    expect(seen.slice(0, 4)).toEqual(['league', 'league', 'cup', 'league']);
+  });
+});
+
+describe('cup', () => {
+  it('starts with all ten league clubs and 22 weaker lower-division clubs', () => {
+    const entrants = newGame(2).cup[0].flatMap((t) => [t.a, t.b]);
+    expect(entrants).toHaveLength(32);
+    expect(new Set(entrants.map((e) => e.clubId).filter((id) => id !== null)).size).toBe(10);
+    const lower = entrants.filter((e) => e.clubId === null);
+    expect(new Set(lower.map((e) => e.name)).size).toBe(22);
+    for (const division of [2, 3] as const) {
+      const clubs = lower.filter((e) => e.division === division);
+      expect(clubs).toHaveLength(11);
+      expect(clubs.every((e) => e.level >= LOWER_LEVELS[division][0] && e.level <= LOWER_LEVELS[division][1])).toBe(true);
+    }
+  });
+
+  it('gives clubs without a European tie that week their fitness back', () => {
+    let s = newGame(2, 1, 6);
+    while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
+    expect(s.round).toBe(EURO_AFTER[0] + 1);
+    for (const id of s.humans) expect(s.clubs[id].squad.every((p) => p.fitness === 9)).toBe(true);
+  });
+});
+
 describe('full game', () => {
   it.each([2, 4, 6])('finishes with %i managers', (humans) => {
-    const s = playOut(newGame(humans, 2, humans));
+    const start = newGame(humans, 2, humans);
+    for (const id of start.humans) start.clubs[id].cash = 5000; // rich enough that nobody drops out early
+    const s = playOut(start);
     expect(s.phase).toBe('gameOver');
     expect(s.season).toBe(2);
     expect(table(s).every((r) => r.p === ROUNDS)).toBe(true);
-    expect(s.cup).toHaveLength(4);
-    expect(s.cup[3]).toHaveLength(1);
-    expect(s.cup[3][0].winner).not.toBeNull();
+    expect(s.cup.map((round) => round.length)).toEqual([16, 8, 4, 2, 1]);
+    expect(s.cup[4][0].winner).not.toBeNull();
+    for (const t of [...s.cup.flat(), ...s.euro.flatMap((c) => c.rounds.flat())]) {
+      expect(t.ag).not.toBe(t.bg);
+      if (t.pens) expect(Math.abs(t.ag! - t.bg!)).toBe(1);
+      expect(t.winner).toBe(t.ag! > t.bg! ? 'a' : 'b');
+    }
   });
 
   it('sends the top four to Europe from the second season on', () => {
     let s = newGame(3, 2, 11);
-    expect(s.euro).toEqual([]);
+    const first = s.euro.flatMap((comp) => comp.rounds[0].flatMap((t) => [t.a.clubId, t.b.clubId])).filter((id) => id !== null);
+    expect(first).toHaveLength(4);
+    expect(first.every((id) => !s.clubs[id].human)).toBe(true);
     while (s.phase !== 'seasonEnd') s = reduce(s, bot(s));
     const top = s.seasonSummary!.map((row) => row.id);
     const cashBefore = s.clubs[top[0]].cash;

@@ -1,5 +1,5 @@
 import {
-  AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, FIRST_NAMES, FOREIGN_CLUBS, FORMATIONS, LAST_NAMES, POS_NAME, fmt,
+  AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, fmt,
   type Card, type FormationId, type Pos,
 } from './data';
 
@@ -9,10 +9,10 @@ export const MAX_SQUAD = 20;
 export const MIN_SQUAD = 11;
 export const LEAGUE_SIZE = 10;
 export const ROUNDS = (LEAGUE_SIZE - 1) * 2;
-/** Cup rounds are played right after these league rounds (0-based). */
-export const CUP_AFTER = [1, 5, 10, 15];
-/** European rounds are played right after these league rounds (0-based), from the second season on. */
-export const EURO_AFTER = [3, 8, 13];
+/** A cup round gets a week of its own right after these league rounds (0-based). */
+export const CUP_AFTER = [1, 4, 7, 11, 16];
+/** European rounds are played right after these league rounds (0-based). */
+export const EURO_AFTER = [3, 9, 14];
 export const LEAGUE_PRIZE = [130, 100, 80, 65, 50, 40, 30, 20, 10, 0];
 export const LEAGUE_VP = [10, 7, 5, 4, 3, 2, 1, 1, 0, 0];
 export const CUP_PRIZE = { winner: 100, finalist: 40 };
@@ -72,12 +72,18 @@ export interface Fixture {
   /** Scoring chances each side had: [home, away]. */
   chances: [number, number] | null;
 }
-export interface CupTie { a: number; b: number; ag: number | null; bg: number | null; winner: number | null; pens: boolean }
 
-/** A league club (`clubId`) or a foreign club with fixed ratings. */
-export interface EuroEntrant { clubId: number | null; name: string; level: number }
-export interface EuroTie { a: EuroEntrant; b: EuroEntrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean }
-export interface EuroComp { tier: number; rounds: EuroTie[][] }
+/** A league club (`clubId`), or a foreign or lower-division club that is only a name and a level. */
+export interface Entrant { clubId: number | null; name: string; level: number; /** Set for a lower-division club. */ division?: 2 | 3 }
+/**
+ * One knockout match. After a shoot-out (`pens`) the winner is credited with one extra goal, so the score
+ * always shows who went through.
+ */
+export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean }
+export interface EuroComp { tier: number; rounds: Tie[][] }
+
+/** One week of the season. `index` is the round within that competition. */
+export interface Week { kind: 'league' | 'cup' | 'euro'; index: number }
 
 export type Pending =
   | { kind: 'auctionPick'; options: Player[] }
@@ -94,7 +100,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number; vp: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 9;
+export const STATE_VERSION = 13;
 
 export interface GameState {
   version: number;
@@ -111,19 +117,27 @@ export interface GameState {
   seasons: number;
   round: number;
   schedule: Fixture[][];
-  cup: CupTie[][];
-  /** Clubs that skip the cup's preliminary round. */
-  cupByes: number[];
-  /** Club ids that earned a European place last season, by competition. Empty in the first season. */
+  cup: Tie[][];
+  /**
+   * Club ids playing in Europe this season, by competition. In the first season these are computer clubs;
+   * after that, last season's top four.
+   */
   qualified: number[][];
   euro: EuroComp[];
+  /** Piles of name indexes still to be used. */
+  names: { first: number[]; last: number[]; foreign: number[] };
   /** Indexes into CARDS still to be drawn; reshuffled when it runs out. */
   deck: number[];
   phase: Phase;
   die: number | null;
   pending: Pending | null;
   notice: { square: number; lines: string[] } | null;
-  results: { round: number; cupRound: number | null; euroRound: number | null } | null;
+  /** The season week by week: league rounds, with cup and European rounds on weeks of their own in between. */
+  calendar: Week[];
+  /** Index into `calendar` of the week being played. */
+  week: number;
+  /** What was just played, while its results are on screen. */
+  results: Week | null;
   seasonSummary: SeasonRow[] | null;
   log: string[];
 }
@@ -187,13 +201,24 @@ export function level(p: Player): number {
 export const sellPrice = (p: Player) => Math.round(playerValue(p.skill, p.spirit) * SELL_RATE);
 export const trainingCost = (p: Player) => 5 * p.skill;
 /** Paid on every payday, per level of skill in the squad. */
-export const WAGE_PER_LEVEL = 2;
+export const WAGE_PER_LEVEL = 1.5;
 export const wages = (c: Club) => Math.round(WAGE_PER_LEVEL * c.squad.reduce((sum, p) => sum + p.skill, 0));
+
+/** Draws from a shuffled pile of the list, so a name does not come round again until the pile is used up. */
+function drawName(s: GameState, key: 'first' | 'last' | 'foreign', list: string[]): string {
+  if (!s.names[key].length) s.names[key] = shuffle(s, list.map((_, i) => i));
+  return list[s.names[key].pop()!];
+}
+
+function newName(s: GameState): string {
+  if (rand(s) < FOREIGN_SHARE) return drawName(s, 'foreign', FOREIGN_NAMES);
+  return `${drawName(s, 'first', FIRST_NAMES)} ${drawName(s, 'last', LAST_NAMES)}`;
+}
 
 function newPlayer(s: GameState, pos: Pos, skill: number): Player {
   return {
     id: s.nextId++,
-    name: `${pick(s, FIRST_NAMES)} ${pick(s, LAST_NAMES)}`,
+    name: newName(s),
     pos,
     skill: Math.max(1, Math.min(MAX_LEVEL, skill)),
     fitness: FULL_FITNESS,
@@ -291,12 +316,6 @@ function makeSchedule(s: GameState): Fixture[][] {
   return [...first, ...second];
 }
 
-function makeCupRound(ids: number[]): CupTie[] {
-  const ties: CupTie[] = [];
-  for (let i = 0; i < ids.length; i += 2) ties.push({ a: ids[i], b: ids[i + 1], ag: null, bg: null, winner: null, pens: false });
-  return ties;
-}
-
 // A match is a series of scoring chances. Midfield decides how many a side gets; each one is then two dice
 // against a target that the forwards lower and the defence and keeper raise.
 //
@@ -330,12 +349,15 @@ export function spiritBonus(x: Strength, y: Strength, tough: boolean): number {
 /** Chance that `x` wins a penalty shoot-out against `y`: nerve decides. */
 export const shootoutOdds = (x: Strength, y: Strength) => Math.max(0.2, Math.min(0.8, 0.5 + 0.06 * (x.spirit - y.spirit)));
 
-/** Starters pay for the match; after a league round the whole squad recovers. */
+/**
+ * Starters pay for the match and everyone who sat it out recovers. A league week gives the starters the same
+ * back, so only the extra cup and European weeks wear a player down.
+ */
 function applyFatigue(c: Club, played: Lineup, leagueRound: boolean) {
   const started = new Set(played.slots.flatMap((x) => (x.player ? [x.player.id] : [])));
   for (const p of c.squad) {
     if (started.has(p.id)) p.fitness = Math.max(1, p.fitness - MATCH_FATIGUE);
-    if (leagueRound) p.fitness = Math.min(FULL_FITNESS, p.fitness + ROUND_RECOVERY);
+    if (leagueRound || !started.has(p.id)) p.fitness = Math.min(FULL_FITNESS, p.fitness + ROUND_RECOVERY);
   }
 }
 
@@ -383,8 +405,8 @@ export function gateIncome(homePos: number, awayPos: number): number {
   return 15 + 3 * (LEAGUE_SIZE - homePos) + 2 * (LEAGUE_SIZE - awayPos);
 }
 
-function makeEuroRound(entrants: EuroEntrant[]): EuroTie[] {
-  const ties: EuroTie[] = [];
+function makeTies(entrants: Entrant[]): Tie[] {
+  const ties: Tie[] = [];
   for (let i = 0; i < entrants.length; i += 2) ties.push({ a: entrants[i], b: entrants[i + 1], ag: null, bg: null, winner: null, pens: false });
   return ties;
 }
@@ -393,24 +415,27 @@ function makeEuroRound(entrants: EuroEntrant[]): EuroTie[] {
 function makeEuro(s: GameState, tier: number, clubIds: number[], names: string[]): EuroComp {
   const info = EURO_COMPS[tier];
   const level = () => info.level[0] + rand(s) * (info.level[1] - info.level[0]) + 0.3 * (s.season - 2);
-  const entrants = Array.from({ length: 8 }, (_, i): EuroEntrant => {
+  const entrants = Array.from({ length: 8 }, (_, i): Entrant => {
     const clubId = i === 0 ? clubIds[0] : i === 4 ? clubIds[1] : undefined;
     return clubId !== undefined
       ? { clubId, name: '', level: 0 }
       : { clubId: null, name: names.pop()!, level: level() };
   });
-  return { tier, rounds: [makeEuroRound(entrants)] };
+  return { tier, rounds: [makeTies(entrants)] };
 }
 
 // ---------- helpers ----------
 
 const club = (s: GameState, id: number) => s.clubs.find((c) => c.id === id)!;
-export const currentClubId = (s: GameState) => s.order[0] ?? s.humans[s.round % Math.max(1, s.humans.length)] ?? 0;
+export const currentClubId = (s: GameState) => s.order[0] ?? s.humans[s.week % Math.max(1, s.humans.length)] ?? 0;
+/** The club that has to act right now: the bidder during an auction, otherwise the manager whose turn it is. */
+export const actingClubId = (s: GameState) => (s.pending?.kind === 'auction' ? s.pending.active[s.pending.idx] : currentClubId(s));
+export const thisWeek = (s: GameState): Week | undefined => s.calendar[s.week];
 
 /** Every manager moves once per round; who goes first rotates. */
 function startRound(s: GameState) {
   const n = s.humans.length;
-  s.order = s.humans.map((_, i) => s.humans[(s.round + i) % n]);
+  s.order = s.humans.map((_, i) => s.humans[(s.week + i) % n]);
   s.phase = n ? 'roll' : 'gameOver';
 }
 
@@ -424,10 +449,23 @@ function log(s: GameState, line: string) {
 
 function startSeason(s: GameState) {
   s.round = 0;
+  s.week = 0;
   s.schedule = makeSchedule(s);
-  const cupDraw = shuffle(s, s.clubs.map((c) => c.id));
-  s.cup = [makeCupRound(cupDraw.slice(0, 4))];
-  s.cupByes = cupDraw.slice(4);
+  s.calendar = [];
+  for (let i = 0; i < ROUNDS; i++) {
+    s.calendar.push({ kind: 'league', index: i });
+    if (CUP_AFTER.includes(i)) s.calendar.push({ kind: 'cup', index: CUP_AFTER.indexOf(i) });
+    if (EURO_AFTER.includes(i)) s.calendar.push({ kind: 'euro', index: EURO_AFTER.indexOf(i) });
+  }
+  const lowerNames = shuffle(s, [...LOWER_CLUBS]);
+  const cupEntrants: Entrant[] = s.clubs.map((c) => ({ clubId: c.id, name: '', level: 0 }));
+  const lowerCount = CUP_SIZE - cupEntrants.length;
+  for (let i = 0; i < lowerCount; i++) {
+    const division = i < lowerCount / 2 ? 2 : 3;
+    const [min, max] = LOWER_LEVELS[division];
+    cupEntrants.push({ clubId: null, name: lowerNames.pop()!, level: min + rand(s) * (max - min), division });
+  }
+  s.cup = [makeTies(shuffle(s, cupEntrants))];
   const foreign = shuffle(s, [...FOREIGN_CLUBS]);
   s.euro = s.qualified.map((ids, tier) => makeEuro(s, tier, ids, foreign));
   s.die = null;
@@ -449,7 +487,7 @@ export function createGame(config: GameConfig): GameState {
   const s: GameState = {
     version: STATE_VERSION,
     seed: config.seed | 0, nextId: 1, clubs: [], humans: [], bankrupt: [], order: [], season: 1, seasons: config.seasons, round: 0,
-    schedule: [], cup: [], cupByes: [], qualified: [], euro: [], deck: [], phase: 'roll', die: null, pending: null, notice: null, results: null,
+    schedule: [], cup: [], qualified: [], euro: [], names: { first: [], last: [], foreign: [] }, deck: [], phase: 'roll', die: null, pending: null, notice: null, calendar: [], week: 0, results: null,
     seasonSummary: null, log: [],
   };
   const aiOffsets = [1, 0, 1, 0, -1, 0, 1, -1];
@@ -470,6 +508,10 @@ export function createGame(config: GameConfig): GameState {
     });
     if (human) s.humans.push(i);
   }
+  // Managers have to earn Europe: in the first season the places go to the strongest computer clubs.
+  const total = (c: Club) => c.squad.reduce((sum, p) => sum + p.skill, 0);
+  const seeded = s.clubs.filter((c) => !c.human).sort((a, b) => total(b) - total(a) || a.id - b.id).map((c) => c.id);
+  s.qualified = [[seeded[0]], [seeded[1]], [seeded[2], seeded[3]]];
   startSeason(s);
   return s;
 }
@@ -663,7 +705,22 @@ function settleAuction(s: GameState) {
   }
 }
 
+/** Plays whatever this week holds: a league round, a cup round or a European round. */
 function playMatchday(s: GameState) {
+  const week = s.calendar[s.week];
+  if (week.kind === 'league') playLeagueRound(s);
+  else if (week.kind === 'cup') playCupRound(s, week.index);
+  else {
+    for (const comp of s.euro) playEuroRound(s, comp, week.index);
+    restOthers(s, s.euro.flatMap((comp) => comp.rounds[week.index]));
+  }
+  s.results = week;
+  s.phase = 'matchday';
+  s.notice = null;
+  s.die = null;
+}
+
+function playLeagueRound(s: GameState) {
   const before = table(s);
   const posOf = (id: number) => before.findIndex((r) => r.id === id) + 1;
   for (const f of s.schedule[s.round]) {
@@ -692,82 +749,86 @@ function playMatchday(s: GameState) {
       if (p.form && p.form.matches !== null && --p.form.matches <= 0) delete p.form;
     }
   }
-
-  const cupRound = CUP_AFTER.indexOf(s.round);
-  if (cupRound >= 0) {
-    const ties = s.cup[cupRound];
-    for (const t of ties) {
-      const a = club(s, t.a);
-      const b = club(s, t.b);
-      const la = lineup(a);
-      const lb = lineup(b);
-      ({ ag: t.ag, bg: t.bg } = playMatch(s, la, lb, spiritBonus(la, lb, true), spiritBonus(lb, la, true)));
-      t.pens = t.ag === t.bg;
-      t.winner = t.ag > t.bg ? t.a : t.bg > t.ag ? t.b : rand(s) < shootoutOdds(la, lb) ? t.a : t.b;
-      applyFatigue(a, la, false);
-      applyFatigue(b, lb, false);
-      log(s, `Cup, ${CUP_ROUND_NAMES[cupRound].toLowerCase()}: ${a.name} – ${b.name} ${t.ag}–${t.bg}${t.pens ? ` (rp. ${club(s, t.winner).name})` : ''}`);
-    }
-    const winners = ties.map((t) => t.winner!);
-    if (cupRound === 0) {
-      s.cup.push(makeCupRound(shuffle(s, [...winners, ...s.cupByes])));
-    } else if (ties.length > 1) {
-      s.cup.push(makeCupRound(winners));
-    } else {
-      const final = ties[0];
-      const winner = club(s, final.winner!);
-      const loser = club(s, final.winner === final.a ? final.b : final.a);
-      winner.cash += CUP_PRIZE.winner;
-      winner.vp += CUP_VP.winner;
-      loser.cash += CUP_PRIZE.finalist;
-      loser.vp += CUP_VP.finalist;
-      log(s, `${winner.name} voittaa cupin.`);
-    }
-  }
-
-  const euroRound = s.euro.length ? EURO_AFTER.indexOf(s.round) : -1;
-  if (euroRound >= 0) for (const comp of s.euro) playEuroRound(s, comp, euroRound);
-
-  s.results = { round: s.round, cupRound: cupRound >= 0 ? cupRound : null, euroRound: euroRound >= 0 ? euroRound : null };
-  s.phase = 'matchday';
-  s.notice = null;
-  s.die = null;
 }
 
-export const entrantName = (s: GameState, e: EuroEntrant) => (e.clubId === null ? e.name : s.clubs[e.clubId].name);
+function playCupRound(s: GameState, cupRound: number) {
+  const ties = s.cup[cupRound];
+  const winners = ties.map((t) => {
+    const won = playTie(s, t);
+    if (t.a.clubId !== null || t.b.clubId !== null) log(s, `Cup, ${CUP_ROUND_NAMES[cupRound].toLowerCase()}: ${tieLine(s, t)}`);
+    return won;
+  });
+  restOthers(s, ties);
+  if (ties.length > 1) {
+    s.cup.push(makeTies(winners));
+    return;
+  }
+  const final = ties[0];
+  const loser = final.winner === 'a' ? final.b : final.a;
+  if (winners[0].clubId !== null) {
+    const c = club(s, winners[0].clubId);
+    c.cash += CUP_PRIZE.winner;
+    c.vp += CUP_VP.winner;
+  }
+  if (loser.clubId !== null) {
+    const c = club(s, loser.clubId);
+    c.cash += CUP_PRIZE.finalist;
+    c.vp += CUP_VP.finalist;
+  }
+  log(s, `${entrantName(s, winners[0])} voittaa cupin.`);
+}
+
+export const entrantName = (s: GameState, e: Entrant) => (e.clubId === null ? e.name : s.clubs[e.clubId].name);
+const tieLine = (s: GameState, t: Tie) => `${entrantName(s, t.a)} – ${entrantName(s, t.b)} ${t.ag}–${t.bg}${t.pens ? ' (rp.)' : ''}`;
+
+/** Plays one knockout match on neutral ground and returns the side that goes through. */
+function playTie(s: GameState, t: Tie): Entrant {
+  // A club from outside the league plays like a 4-4-2 whose players are all of its level.
+  const strength = (e: Entrant): Strength =>
+    e.clubId === null
+      ? { att: 2 * e.level, mid: 4 * e.level, def: 4 * e.level, gk: e.level, spirit: 5, shape: FORMATIONS['4-4-2'] }
+      : lineup(club(s, e.clubId));
+  const a = strength(t.a);
+  const b = strength(t.b);
+  ({ ag: t.ag, bg: t.bg } = playMatch(s, a, b, spiritBonus(a, b, true), spiritBonus(b, a, true)));
+  t.pens = t.ag === t.bg;
+  t.winner = t.ag > t.bg ? 'a' : t.bg > t.ag ? 'b' : rand(s) < shootoutOdds(a, b) ? 'a' : 'b';
+  if (t.pens) {
+    if (t.winner === 'a') t.ag++;
+    else t.bg++;
+  }
+  if (t.a.clubId !== null) applyFatigue(club(s, t.a.clubId), a as Lineup, false);
+  if (t.b.clubId !== null) applyFatigue(club(s, t.b.clubId), b as Lineup, false);
+  return t[t.winner];
+}
+
+/** A cup or European week is a week off for every club not involved: their players recover. */
+function restOthers(s: GameState, ties: Tie[]) {
+  const playing = new Set(ties.flatMap((t) => [t.a.clubId, t.b.clubId]));
+  for (const c of s.clubs) {
+    if (playing.has(c.id)) continue;
+    for (const p of c.squad) p.fitness = Math.min(FULL_FITNESS, p.fitness + ROUND_RECOVERY);
+  }
+}
 
 function playEuroRound(s: GameState, comp: EuroComp, round: number) {
   const info = EURO_COMPS[comp.tier];
   const ties = comp.rounds[round];
-  // A foreign club plays like a 4-4-2 whose players are all of its level.
-  const strength = (e: EuroEntrant): Strength =>
-    e.clubId === null
-      ? { att: 2 * e.level, mid: 4 * e.level, def: 4 * e.level, gk: e.level, spirit: 5, shape: FORMATIONS['4-4-2'] }
-      : lineup(club(s, e.clubId));
-  for (const t of ties) {
-    const a = strength(t.a);
-    const b = strength(t.b);
-    ({ ag: t.ag, bg: t.bg } = playMatch(s, a, b, spiritBonus(a, b, true), spiritBonus(b, a, true)));
-    t.pens = t.ag === t.bg;
-    t.winner = t.ag > t.bg ? 'a' : t.bg > t.ag ? 'b' : rand(s) < shootoutOdds(a, b) ? 'a' : 'b';
-    if (t.a.clubId !== null) applyFatigue(club(s, t.a.clubId), a as Lineup, false);
-    if (t.b.clubId !== null) applyFatigue(club(s, t.b.clubId), b as Lineup, false);
-    const won = t[t.winner];
+  const winners = ties.map((t) => {
+    const won = playTie(s, t);
     if (won.clubId !== null) club(s, won.clubId).cash += info.win;
-    if (t.a.clubId !== null || t.b.clubId !== null) {
-      log(s, `${info.name}, ${EURO_ROUND_NAMES[round].toLowerCase()}: ${entrantName(s, t.a)} – ${entrantName(s, t.b)} ${t.ag}–${t.bg}${t.pens ? ` (rp. ${entrantName(s, won)})` : ''}`);
-    }
-  }
+    if (t.a.clubId !== null || t.b.clubId !== null) log(s, `${info.name}, ${EURO_ROUND_NAMES[round].toLowerCase()}: ${tieLine(s, t)}`);
+    return won;
+  });
   if (ties.length > 1) {
-    comp.rounds.push(makeEuroRound(ties.map((t) => t[t.winner!])));
+    comp.rounds.push(makeTies(winners));
     return;
   }
   const final = ties[0];
-  const winner = final[final.winner!];
   const loser = final.winner === 'a' ? final.b : final.a;
-  if (winner.clubId !== null) {
-    club(s, winner.clubId).vp += info.vp.winner;
-    log(s, `${club(s, winner.clubId).name} voittaa kilpailun ${info.name}.`);
+  if (winners[0].clubId !== null) {
+    club(s, winners[0].clubId).vp += info.vp.winner;
+    log(s, `${club(s, winners[0].clubId).name} voittaa kilpailun ${info.name}.`);
   }
   if (loser.clubId !== null) club(s, loser.clubId).vp += info.vp.finalist;
 }
@@ -908,12 +969,14 @@ export function reduce(state: GameState, action: Action): GameState {
       return s;
 
     case 'SELL': {
-      if (!inTurn || p || me.squad.length <= MIN_SQUAD) return state;
-      const i = me.squad.findIndex((x) => x.id === action.playerId);
+      // Selling is also allowed in the middle of an offer, so a manager can raise the money for it.
+      const seller = club(s, actingClubId(s));
+      if (!inTurn || seller.squad.length <= MIN_SQUAD) return state;
+      const i = seller.squad.findIndex((x) => x.id === action.playerId);
       if (i < 0) return state;
-      const [sold] = me.squad.splice(i, 1);
-      me.cash += sellPrice(sold);
-      log(s, `${me.name} myy pelaajan ${sold.name} hintaan ${fmt(sellPrice(sold))}.`);
+      const [sold] = seller.squad.splice(i, 1);
+      seller.cash += sellPrice(sold);
+      log(s, `${seller.name} myy pelaajan ${sold.name} hintaan ${fmt(sellPrice(sold))}.`);
       return s;
     }
 
@@ -929,9 +992,10 @@ export function reduce(state: GameState, action: Action): GameState {
 
     case 'CONTINUE':
       if (s.phase === 'matchday') {
+        if (s.results?.kind === 'league') s.round++;
         s.results = null;
-        s.round++;
-        if (s.round >= ROUNDS) endSeason(s);
+        s.week++;
+        if (s.week >= s.calendar.length) endSeason(s);
         else startRound(s);
         return s;
       }
