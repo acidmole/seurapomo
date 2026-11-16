@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type Tie,
+  EURO_AFTER, FULL_TIME, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -42,17 +42,44 @@ export function Standings({ game }: { game: GameState }) {
   );
 }
 
-export function FixtureList({ game, fixtures }: { game: GameState; fixtures: Fixture[] }) {
+/** The side that scored in stoppage time, if any: 0, 1, or both. */
+const lateGoals = (events: MatchEvent[] | undefined) => (events ?? []).filter((e) => e.goal && e.minute > FULL_TIME).map((e) => e.side);
+
+/** Goals each side has scored by `minute`, and the chances so far. */
+function scoreAt(events: MatchEvent[] | undefined, minute: number) {
+  const sofar = (events ?? []).filter((e) => e.minute <= minute);
+  const count = (side: 0 | 1, goalsOnly: boolean) => sofar.filter((e) => e.side === side && (e.goal || !goalsOnly)).length;
+  return { goals: [count(0, true), count(1, true)], chances: [count(0, false), count(1, false)] };
+}
+
+/**
+ * A league round. With `minute` set the matches are shown as they stand at that minute, and a manager's match
+ * flashes each time a goal goes in.
+ */
+export function FixtureList({ game, fixtures, minute }: { game: GameState; fixtures: Fixture[]; minute?: number }) {
   return (
     <div className="fixtures">
-      {fixtures.map((f, i) => (
-        <div key={i} className="fixture">
-          <span className="right"><ClubName game={game} id={f.home} /></span>
-          <span className="score">{f.hg === null ? '–' : `${f.hg}–${f.ag}`}</span>
-          <span><ClubName game={game} id={f.away} /></span>
-          {f.chances && <span className="chances muted small">Maalipaikat {f.chances[0]}–{f.chances[1]}</span>}
-        </div>
-      ))}
+      {fixtures.map((f, i) => {
+        const live = minute !== undefined ? scoreAt(f.events, minute) : null;
+        const ours = game.clubs[f.home].human || game.clubs[f.away].human;
+        const goals = live ? live.goals[0] + live.goals[1] : 0;
+        const chances = live ? live.chances : f.chances;
+        return (
+          <div key={`${i}:${goals}`} className={live && ours && goals > 0 ? 'fixture goal-flash' : 'fixture'}>
+            <span className="right"><ClubName game={game} id={f.home} /></span>
+            <span className="score">{live ? `${live.goals[0]}–${live.goals[1]}` : f.hg === null ? '–' : `${f.hg}–${f.ag}`}</span>
+            <span><ClubName game={game} id={f.away} /></span>
+            {chances && (
+              <span className="chances muted small">
+                Maalipaikat {chances[0]}–{chances[1]}
+                {!live && lateGoals(f.events).map((side, n) => (
+                  <strong key={n}> · Lisäajan maali: {game.clubs[side === 0 ? f.home : f.away].name}</strong>
+                ))}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -70,30 +97,38 @@ function EntrantName({ game, entrant }: { game: GameState; entrant: Entrant }) {
 const hasLeagueClub = (t: Tie) => t.a.clubId !== null || t.b.clubId !== null;
 
 /** One knockout round. Ties between two clubs from outside the league are left out while any league club is still in. */
-export function Ties({ game, ties }: { game: GameState; ties: Tie[] }) {
+export function Ties({ game, ties, minute }: { game: GameState; ties: Tie[]; minute?: number }) {
   const shown = ties.some(hasLeagueClub) ? ties.filter(hasLeagueClub) : ties;
+  const human = (e: Entrant) => e.clubId !== null && game.clubs[e.clubId].human;
   return (
     <div className="fixtures">
-      {shown.map((t, i) => (
-        <div key={i} className="fixture">
-          <span className={`right ${t.winner === 'a' ? 'winner' : ''}`}><EntrantName game={game} entrant={t.a} /></span>
-          <span className="score">{t.ag === null ? '–' : `${t.ag}–${t.bg}`}</span>
-          <span className={t.winner === 'b' ? 'winner' : ''}><EntrantName game={game} entrant={t.b} /></span>
-          {t.pens && <span className="chances muted small">Ratkesi rangaistuspotkuilla</span>}
-        </div>
-      ))}
+      {shown.map((t, i) => {
+        const live = minute !== undefined ? scoreAt(t.events, minute) : null;
+        const goals = live ? live.goals[0] + live.goals[1] : 0;
+        return (
+          <div key={`${i}:${goals}`} className={live && goals > 0 && (human(t.a) || human(t.b)) ? 'fixture goal-flash' : 'fixture'}>
+            <span className={`right ${!live && t.winner === 'a' ? 'winner' : ''}`}><EntrantName game={game} entrant={t.a} /></span>
+            <span className="score">{live ? `${live.goals[0]}–${live.goals[1]}` : t.ag === null ? '–' : `${t.ag}–${t.bg}`}</span>
+            <span className={!live && t.winner === 'b' ? 'winner' : ''}><EntrantName game={game} entrant={t.b} /></span>
+            {!live && t.pens && <span className="chances muted small">Ratkesi rangaistuspotkuilla</span>}
+            {!live && lateGoals(t.events).map((side, n) => (
+              <span key={n} className="chances muted small"><strong>Lisäajan maali: {entrantName(game, side === 0 ? t.a : t.b)}</strong></span>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 /** One round of a European cup; skipped once no league club is left in it, except for the final. */
-export function EuroTies({ game, comp, round }: { game: GameState; comp: EuroComp; round: number }) {
+export function EuroTies({ game, comp, round, minute }: { game: GameState; comp: EuroComp; round: number; minute?: number }) {
   const ties = comp.rounds[round];
   if (ties.length > 1 && !ties.some(hasLeagueClub)) return null;
   return (
     <>
       <h3>{EURO_COMPS[comp.tier].name}: {EURO_ROUND_NAMES[round].toLowerCase()}</h3>
-      <Ties game={game} ties={ties} />
+      <Ties game={game} ties={ties} minute={minute} />
     </>
   );
 }
@@ -177,6 +212,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           {Object.keys(FORMATIONS).map((f) => <option key={f}>{f}</option>)}
         </select>
         {club.morale !== 0 && <span className="muted small">{club.morale > 0 ? 'Joukkue on hyvässä vireessä' : 'Joukkue on huonossa vireessä'}</span>}
+        {club.surge && <span className="pos small">Seuraavassa sarjaottelussa varma maalipaikka lisäajalla</span>}
       </label>
 
       <p className="small">
@@ -262,7 +298,8 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Cup- ja
         eurocupviikot siis kuluttavat: pelaaja palautuu vasta, kun hän lepää yhden ottelun. Kun
         kunto on enintään {TIRED_AT}, taito laskee yhdellä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,
-        altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa.
+        altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa. Sisukas joukkue saa myös useammin vielä yhden
+        maalipaikan lisäajalla.
       </p>
     </>
   );

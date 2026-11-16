@@ -57,6 +57,8 @@ export interface Club {
   boardPos: number;
   /** -1, 0 or 1: applies to the next league match only. */
   morale: number;
+  /** A card has promised a stoppage-time chance in the next league match. */
+  surge?: boolean;
   /** A manager who could not pay his debts. The computer runs the club from then on. */
   bankrupt?: boolean;
 }
@@ -70,6 +72,8 @@ export interface Fixture {
   gate: number | null;
   /** Scoring chances each side had: [home, away]. */
   chances: [number, number] | null;
+  /** The chances in the order they came, for showing the match live. */
+  events?: MatchEvent[];
 }
 
 /** A league club (`clubId`), or a foreign or lower-division club that is only a name and a level. */
@@ -78,7 +82,7 @@ export interface Entrant { clubId: number | null; name: string; level: number; /
  * One knockout match. After a shoot-out (`pens`) the winner is credited with one extra goal, so the score
  * always shows who went through.
  */
-export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean }
+export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean; events?: MatchEvent[] }
 export interface EuroComp { tier: number; rounds: Tie[][] }
 
 /** One week of the season. `index` is the round within that competition. */
@@ -99,7 +103,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 15;
+export const STATE_VERSION = 17;
 
 export interface GameState {
   version: number;
@@ -324,7 +328,7 @@ function makeSchedule(s: GameState): Fixture[][] {
 // sides score the same whether they are all level 3 or all level 8. Formation shape gives fixed shifts on
 // top: an extra forward makes every chance better, an extra defender makes every chance against worse, an
 // extra midfielder wins chances.
-export const CHANCES_BASE = 5;
+export const CHANCES_BASE = 4.85;
 export const HOME_CHANCES = 0.5;
 export const MORALE_CHANCES = 0.5;
 export const SCORE_TARGET = 9.15;
@@ -387,18 +391,38 @@ export function expectedChances(x: Strength, y: Strength, bonus = 0): number {
   return Math.max(0.5, CHANCES_BASE + MIDFIELD_COUNT_CHANCES * (x.shape.KK - y.shape.KK) + LEVEL_WEIGHT * quality + bonus);
 }
 
-function playSide(s: GameState, x: Strength, y: Strength, bonus: number): { chances: number; goals: number } {
+/**
+ * One scoring chance: when it came, which side had it (0 = first-named side) and whether it went in.
+ * Minutes 91–95 are stoppage time.
+ */
+export interface MatchEvent { minute: number; side: 0 | 1; goal: boolean }
+export const FULL_TIME = 90;
+export const STOPPAGE = 5;
+
+/** Chance that a side forces one more scoring chance in stoppage time: sisu keeps a team going to the whistle. */
+export const stoppageOdds = (x: Strength) => Math.max(0, Math.min(0.5, 0.1 * (x.spirit - 3.5)));
+
+function playSide(s: GameState, side: 0 | 1, x: Strength, y: Strength, bonus: number, surge: boolean): MatchEvent[] {
   const chances = poisson(s, expectedChances(x, y, bonus));
   const odds = scoringOdds(x, y);
-  let goals = 0;
-  for (let i = 0; i < chances; i++) if (rand(s) < odds) goals++;
-  return { chances, goals };
+  const events = Array.from({ length: chances }, (): MatchEvent => ({ minute: 1 + randInt(s, FULL_TIME), side, goal: rand(s) < odds }));
+  if (rand(s) < stoppageOdds(x) || surge) {
+    events.push({ minute: FULL_TIME + 1 + randInt(s, STOPPAGE), side, goal: rand(s) < odds });
+  }
+  return events;
 }
 
-function playMatch(s: GameState, a: Strength, b: Strength, aBonus = 0, bBonus = 0) {
-  const x = playSide(s, a, b, aBonus);
-  const y = playSide(s, b, a, bBonus);
-  return { ag: x.goals, bg: y.goals, chances: [x.chances, y.chances] as [number, number] };
+function playMatch(s: GameState, a: Strength, b: Strength, aBonus = 0, bBonus = 0, aSurge = false, bSurge = false) {
+  const x = playSide(s, 0, a, b, aBonus, aSurge);
+  const y = playSide(s, 1, b, a, bBonus, bSurge);
+  const goals = (events: MatchEvent[]) => events.filter((e) => e.goal).length;
+  return {
+    ag: goals(x),
+    bg: goals(y),
+    chances: [x.length, y.length] as [number, number],
+    // The two sides' chances interleaved in the order they happened.
+    events: [...x, ...y].sort((p, q) => p.minute - q.minute),
+  };
 }
 
 /** Ticket income for a home match. Meetings of teams high in the table draw bigger crowds. */
@@ -574,6 +598,9 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
     case 'morale':
       c.morale = card.amount;
       break;
+    case 'surge':
+      c.surge = true;
+      break;
     case 'spirit':
       if (target) target.spirit = Math.max(1, Math.min(9, target.spirit + card.amount));
       break;
@@ -734,18 +761,21 @@ function playLeagueRound(s: GameState) {
       s, h, a,
       HOME_CHANCES + MORALE_CHANCES * home.morale + spiritBonus(h, a, false),
       MORALE_CHANCES * away.morale + spiritBonus(a, h, true),
+      !!home.surge, !!away.surge,
     );
     applyFatigue(home, h, true);
     applyFatigue(away, a, true);
     f.hg = played.ag;
     f.ag = played.bg;
     f.chances = played.chances;
+    f.events = played.events;
     f.gate = gateIncome(posOf(home.id), posOf(away.id));
     home.cash += f.gate;
     log(s, `${home.name} – ${away.name} ${f.hg}–${f.ag}${home.human ? `. Lipputulot ${fmt(f.gate)}.` : ''}`);
   }
   for (const c of s.clubs) {
     c.morale = 0;
+    delete c.surge;
     for (const p of c.squad) {
       if (p.out > 0 && --p.out === 0) delete p.outReason;
       if (p.form && p.form.matches !== null && --p.form.matches <= 0) delete p.form;
@@ -790,7 +820,7 @@ function playTie(s: GameState, t: Tie): Entrant {
       : lineup(club(s, e.clubId));
   const a = strength(t.a);
   const b = strength(t.b);
-  ({ ag: t.ag, bg: t.bg } = playMatch(s, a, b, spiritBonus(a, b, true), spiritBonus(b, a, true)));
+  ({ ag: t.ag, bg: t.bg, events: t.events } = playMatch(s, a, b, spiritBonus(a, b, true), spiritBonus(b, a, true)));
   t.pens = t.ag === t.bg;
   t.winner = t.ag > t.bg ? 'a' : t.bg > t.ag ? 'b' : rand(s) < shootoutOdds(a, b) ? 'a' : 'b';
   if (t.pens) {

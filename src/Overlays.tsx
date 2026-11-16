@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ClubName, EuroTies, FixtureList, Standings, Ties } from './Sidebar';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, fmt } from './game/data';
-import { squadValue, wealth, type GameState } from './game/engine';
+import { FULL_TIME, STOPPAGE, squadValue, wealth, type GameState } from './game/engine';
 
 function Overlay({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -14,40 +14,74 @@ function Overlay({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+const LAST_MINUTE = FULL_TIME + STOPPAGE;
+/** Milliseconds per match minute while the week is shown live: ninety minutes take about fifteen seconds. */
+const MINUTE_MS = 165;
+
 export function MatchdayResults({ game, onContinue }: { game: GameState; onContinue: () => void }) {
   const r = game.results!;
   const last = game.week === game.calendar.length - 1;
   const fixtures = r.kind === 'league' ? game.schedule[r.index] : [];
+  const ties = r.kind === 'cup' ? game.cup[r.index] : r.kind === 'euro' ? game.euro.flatMap((comp) => comp.rounds[r.index]) : [];
   const gates = fixtures.filter((f) => game.clubs[f.home].human && f.gate != null);
+
+  // The week is played out live only when a manager has a match in it, and not for people who ask for less motion.
+  const human = (id: number | null) => id !== null && game.clubs[id].human;
+  const involved = fixtures.some((f) => human(f.home) || human(f.away)) || ties.some((t) => human(t.a.clubId) || human(t.b.clubId));
+  const [minute, setMinute] = useState(() =>
+    involved && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : LAST_MINUTE + 1,
+  );
+  const live = minute <= LAST_MINUTE;
+  const stoppage = minute > FULL_TIME;
+  useEffect(() => {
+    if (!live) return;
+    const timer = setTimeout(() => setMinute((m) => m + 1), stoppage ? MINUTE_MS * 3 : MINUTE_MS);
+    return () => clearTimeout(timer);
+  }, [minute, live, stoppage]);
+  const shown = live ? minute : undefined;
+
   const title =
-    r.kind === 'league' ? `Kierroksen ${r.index + 1} tulokset`
+    r.kind === 'league' ? `Kierros ${r.index + 1}`
     : r.kind === 'cup' ? `Cup: ${CUP_ROUND_NAMES[r.index].toLowerCase()}`
     : `Eurocupit: ${EURO_ROUND_NAMES[r.index].toLowerCase()}`;
   return (
-    <Overlay title={title}>
-      {r.kind === 'league' && <FixtureList game={game} fixtures={fixtures} />}
-      {r.kind === 'cup' && <Ties game={game} ties={game.cup[r.index]} />}
-      {r.kind === 'euro' && game.euro.map((comp) => <EuroTies key={comp.tier} game={game} comp={comp} round={r.index} />)}
-      {r.kind !== 'league' && (
-        <p className="muted small">Joukkueet, joilla ei ollut ottelua tällä viikolla, lepäsivät: niiden pelaajien kunto palautui.</p>
+    <Overlay title={live ? title : r.kind === 'league' ? `Kierroksen ${r.index + 1} tulokset` : title}>
+      {live && (
+        <div className="clock" role="timer" aria-label={`Ottelut käynnissä, ${minute}. minuutti`}>
+          <span className="clock-minute">{stoppage ? `90+${minute - FULL_TIME}'` : `${minute}'`}</span>
+          <span className="clock-bar"><span style={{ width: `${Math.min(1, minute / FULL_TIME) * 100}%` }} /></span>
+          {stoppage && <strong className="clock-stoppage">Lisäaika</strong>}
+        </div>
       )}
-      {gates.length > 0 && (
+      {r.kind === 'league' && <FixtureList game={game} fixtures={fixtures} minute={shown} />}
+      {r.kind === 'cup' && <Ties game={game} ties={game.cup[r.index]} minute={shown} />}
+      {r.kind === 'euro' && game.euro.map((comp) => <EuroTies key={comp.tier} game={game} comp={comp} round={r.index} minute={shown} />)}
+      {live ? (
+        <button className="big" onClick={() => setMinute(LAST_MINUTE + 1)}>Näytä lopputulokset</button>
+      ) : (
         <>
-          <h3>Kotiotteluiden lipputulot</h3>
-          <div className="gates">
-            {gates.map((f) => (
-              <span key={f.home}><ClubName game={game} id={f.home} /> +{fmt(f.gate!)}</span>
-            ))}
-          </div>
+          {r.kind !== 'league' && (
+            <p className="muted small">Joukkueet, joilla ei ollut ottelua tällä viikolla, lepäsivät: niiden pelaajien kunto palautui.</p>
+          )}
+          {gates.length > 0 && (
+            <>
+              <h3>Kotiotteluiden lipputulot</h3>
+              <div className="gates">
+                {gates.map((f) => (
+                  <span key={f.home}><ClubName game={game} id={f.home} /> +{fmt(f.gate!)}</span>
+                ))}
+              </div>
+            </>
+          )}
+          {r.kind === 'league' && (
+            <>
+              <h3>Sarjataulukko</h3>
+              <Standings game={game} />
+            </>
+          )}
+          <button className="primary big" onClick={onContinue}>{last ? 'Kauden päätös' : 'Seuraava viikko'}</button>
         </>
       )}
-      {r.kind === 'league' && (
-        <>
-          <h3>Sarjataulukko</h3>
-          <Standings game={game} />
-        </>
-      )}
-      <button className="primary big" onClick={onContinue}>{last ? 'Kauden päätös' : 'Seuraava viikko'}</button>
     </Overlay>
   );
 }

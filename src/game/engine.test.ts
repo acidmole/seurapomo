@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import {
-  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, wealth, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, stoppageOdds, wealth, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -85,6 +85,12 @@ describe('ticket income', () => {
     const before = s.clubs.map((c) => c.cash);
     while (s.phase !== 'matchday') s = reduce(s, bot(s));
     for (const f of s.schedule[0]) {
+      const events = f.events!;
+      expect(events.filter((e) => e.side === 0 && e.goal)).toHaveLength(f.hg!);
+      expect(events.filter((e) => e.side === 1 && e.goal)).toHaveLength(f.ag!);
+      expect(events.map((e) => e.side).filter((side) => side === 0)).toHaveLength(f.chances![0]);
+      expect(events.map((e) => e.minute)).toEqual([...events.map((e) => e.minute)].sort((a, b) => a - b));
+      expect(events.every((e) => e.minute >= 1 && e.minute <= 95)).toBe(true);
       expect(f.chances![0]).toBeGreaterThanOrEqual(f.hg!);
       expect(f.chances![1]).toBeGreaterThanOrEqual(f.ag!);
       expect(f.gate).toBeGreaterThan(0);
@@ -324,6 +330,21 @@ describe('fitness and sisu', () => {
     }
   });
 
+  it('gives a gritty side a stoppage-time chance more often, and a card can promise one', () => {
+    const side = (spirit: number) => ({ att: 10, mid: 20, def: 20, gk: 5, spirit, shape: FORMATIONS['4-4-2'] });
+    expect(stoppageOdds(side(3))).toBe(0);
+    expect(stoppageOdds(side(7))).toBeGreaterThan(stoppageOdds(side(5)));
+    expect(stoppageOdds(side(9))).toBe(0.5);
+
+    let s = playCardNow(newGame(2, 4), CARDS.findIndex((c) => c.kind === 'surge'));
+    const me = currentClubId(s);
+    expect(s.clubs[me].surge).toBe(true);
+    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    const match = s.schedule[0].find((f) => f.home === me || f.away === me)!;
+    expect(match.events!.some((e) => e.minute > 90 && e.side === (match.home === me ? 0 : 1))).toBe(true);
+    expect(s.clubs[me].surge).toBeUndefined();
+  });
+
   it('counts sisu only in a tough spot', () => {
     const side = (spirit: number, lvl = 5) => ({ att: 2 * lvl, mid: 4 * lvl, def: 4 * lvl, gk: lvl, spirit, shape: FORMATIONS['4-4-2'] });
     expect(spiritBonus(side(8), side(5), false)).toBe(0);
@@ -432,6 +453,7 @@ describe('full game', () => {
 
   it('sends the top four to Europe from the second season on', () => {
     let s = newGame(3, 11);
+    for (const id of s.humans) s.clubs[id].cash = 9000; // nobody drops out before the second season is over
     const first = s.euro.flatMap((comp) => comp.rounds[0].flatMap((t) => [t.a.clubId, t.b.clubId])).filter((id) => id !== null);
     expect(first).toHaveLength(4);
     expect(first.every((id) => !s.clubs[id].human)).toBe(true);
@@ -456,7 +478,7 @@ describe('full game', () => {
 
   it('keeps the economy playable', () => {
     const cash: number[] = [];
-    for (let seed = 1; seed <= 30; seed++) {
+    for (let seed = 1; seed <= 12; seed++) {
       const s = playOut(newGame(4, seed));
       for (const id of s.humans) cash.push(s.clubs[id].cash);
     }

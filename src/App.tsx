@@ -80,7 +80,7 @@ export default function App() {
         <Board game={game} dispatch={dispatch} />
         <Sidebar key={actingClubId(game)} game={game} dispatch={dispatch} />
       </main>
-      {game.phase === 'matchday' && <MatchdayResults game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} />}
+      {game.phase === 'matchday' && <MatchdayResults key={game.week} game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} />}
       {game.phase === 'seasonEnd' && (
         <SeasonEnd game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} onFinish={() => dispatch({ type: 'FINISH' })} />
       )}

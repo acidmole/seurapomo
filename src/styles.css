@@ -262,6 +262,26 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .fixture .winner .club { font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .gates { display: flex; flex-wrap: wrap; gap: 6px 18px; }
 
+/* Live results: a match clock, and a flash on a manager's match whenever a goal goes in. */
+.clock { display: flex; align-items: center; gap: 12px; }
+.clock-minute { min-width: 3.2em; font: 700 30px/1 var(--display); font-variant-numeric: tabular-nums; }
+.clock-bar { flex: 1; height: 8px; background: var(--well); }
+.clock-bar span { display: block; height: 100%; background: #17231b; }
+.clock-stoppage { padding: 4px 10px; background: var(--danger); color: #fff; font: 700 16px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; }
+.goal-flash { animation: goal-flash 1.6s ease-out; }
+.goal-flash .score { animation: goal-pop 0.5s ease-out; }
+@keyframes goal-flash {
+  0%, 30% { background: var(--accent); box-shadow: 0 0 0 3px #17231b; }
+  100% { background: var(--well); box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes goal-pop {
+  0% { transform: scale(1.7); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .goal-flash, .goal-flash .score { animation: none; }
+}
+
 .log { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 14px; }
 .log li { padding: 5px 8px; background: var(--well); }
 

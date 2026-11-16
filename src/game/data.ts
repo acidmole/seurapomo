@@ -70,6 +70,8 @@ export type Card =
   | { kind: 'heal'; text: string }
   | { kind: 'morale'; amount: number; text: string }
   | { kind: 'spirit'; amount: number; text: string }
+  /** A guaranteed scoring chance in stoppage time of the next league match. */
+  | { kind: 'surge'; text: string }
   /** The whole squad back to full fitness. */
   | { kind: 'fitness'; text: string }
   | { kind: 'youth'; text: string }
@@ -103,6 +105,7 @@ export const CARDS: Card[] = [
   { kind: 'morale', amount: -1, text: 'Pukukopissa riidellään peliajasta. Seuraavassa ottelussa saatte tavallista vähemmän maalipaikkoja.' },
   { kind: 'spirit', amount: 2, text: '{p} pelaa koko ottelun murtuneella varpaalla eikä valita. Sisu nousee kahdella.' },
   { kind: 'spirit', amount: -1, text: '{p} riitelee valmentajan kanssa ja murjottaa. Sisu laskee.' },
+  { kind: 'surge', text: 'Kannattajat lupaavat laulaa loppuun asti. Seuraavassa sarjaottelussa saatte varman maalipaikan lisäajalla.' },
   { kind: 'fitness', text: 'Seura palkkaa kuntovalmentajan viikoksi. Koko joukkueen kunto palautuu täyteen.' },
   { kind: 'leave', text: '{p} on saanut tarpeekseen valmentajasta ja lähtee seurasta.' },
   { kind: 'leave', text: '{p} saa ulkomailta tarjouksen, josta ei voi kieltäytyä, ja lähtee.' },
