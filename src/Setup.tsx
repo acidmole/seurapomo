@@ -8,12 +8,10 @@ const DEFAULT_NAMES = ['Punaiset', 'Siniset', 'Keltaiset', 'Vihreät', 'Violetit
 export default function Setup({ onStart }: { onStart: (config: GameConfig) => void }) {
   const [count, setCount] = useState(2);
   const [names, setNames] = useState(DEFAULT_NAMES);
-  const [seasons, setSeasons] = useState(2);
 
   const start = () =>
     onStart({
       clubs: names.slice(0, count).map((name, i) => ({ name: name.trim() || DEFAULT_NAMES[i], color: HUMAN_COLORS[i] })),
-      seasons,
       seed: Date.now() % 2147483647,
     });
 
@@ -46,17 +44,11 @@ export default function Setup({ onStart }: { onStart: (config: GameConfig) => vo
           ))}
         </div>
 
-        <h2 className="label">Pelin pituus</h2>
-        <div className="segmented">
-          {[1, 2, 3].map((n) => (
-            <button key={n} className={n === seasons ? 'active' : ''} onClick={() => setSeasons(n)}>
-              {n === 1 ? '1 kausi' : `${n} kautta`}
-            </button>
-          ))}
-        </div>
         <p className="muted small">
-          Yksi kausi kestää noin 45–60 minuuttia. Ensimmäisellä kaudella eurocupeissa pelaavat vain tietokoneen
-          seurat; managerit pääsevät mukaan sijoittumalla sarjassa neljän parhaan joukkoon.
+          Peli ei ole määrämittainen. Jokaisen kauden päätteeksi päätätte yhdessä, pelataanko vielä yksi vuosi vai
+          lasketaanko pisteet: voittaja on se, jolla on eniten rahaa, kun kassaan lisätään pelaajien arvo.
+          Ensimmäisellä kaudella eurocupeissa pelaavat vain tietokoneen seurat; managerit pääsevät mukaan
+          sijoittumalla sarjassa neljän parhaan joukkoon.
         </p>
 
         <button className="primary big" onClick={start}>Aloita peli</button>

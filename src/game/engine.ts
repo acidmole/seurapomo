@@ -14,9 +14,7 @@ export const CUP_AFTER = [1, 4, 7, 11, 16];
 /** European rounds are played right after these league rounds (0-based). */
 export const EURO_AFTER = [3, 9, 14];
 export const LEAGUE_PRIZE = [130, 100, 80, 65, 50, 40, 30, 20, 10, 0];
-export const LEAGUE_VP = [10, 7, 5, 4, 3, 2, 1, 1, 0, 0];
 export const CUP_PRIZE = { winner: 100, finalist: 40 };
-export const CUP_VP = { winner: 5, finalist: 2 };
 export const SELL_RATE = 0.6;
 export const MAX_LEVEL = 9;
 export const FULL_FITNESS = 9;
@@ -41,6 +39,8 @@ export interface Player {
   spirit: number;
   /** Temporary form from a card: added to skill for `matches` more league rounds, or all season when null. */
   form?: { amount: number; matches: number | null };
+  /** The manager has told him to sit out this week's match. */
+  resting?: boolean;
   /** League matches the player still misses. */
   out: number;
   outReason?: 'injury' | 'ban';
@@ -57,7 +57,6 @@ export interface Club {
   boardPos: number;
   /** -1, 0 or 1: applies to the next league match only. */
   morale: number;
-  vp: number;
   /** A manager who could not pay his debts. The computer runs the club from then on. */
   bankrupt?: boolean;
 }
@@ -97,10 +96,10 @@ export type Pending =
 
 export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 
-export interface SeasonRow { id: number; pos: number; prize: number; vp: number }
+export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 13;
+export const STATE_VERSION = 15;
 
 export interface GameState {
   version: number;
@@ -114,7 +113,6 @@ export interface GameState {
   /** Managers still to take their turn this round; the first one is up. */
   order: number[];
   season: number;
-  seasons: number;
   round: number;
   schedule: Fixture[][];
   cup: Tie[][];
@@ -152,11 +150,14 @@ export type Action =
   | { type: 'SKIP' }
   | { type: 'SET_FORMATION'; formation: FormationId }
   | { type: 'SELL'; playerId: number }
+  | { type: 'REST'; playerId: number }
   | { type: 'BANKRUPT' }
   | { type: 'END_TURN' }
-  | { type: 'CONTINUE' };
+  | { type: 'CONTINUE' }
+  /** At the end of a season: stop here and count up instead of playing another year. */
+  | { type: 'FINISH' };
 
-export interface GameConfig { clubs: { name: string; color: string }[]; seasons: number; seed: number }
+export interface GameConfig { clubs: { name: string; color: string }[]; seed: number }
 
 // ---------- random ----------
 
@@ -242,7 +243,7 @@ export interface Lineup extends Strength { slots: Slot[] }
 /** Best available eleven for the club's formation. Gaps are filled out of position at half skill. */
 export function lineup(club: Club): Lineup {
   const f = FORMATIONS[club.formation];
-  const avail = club.squad.filter((p) => p.out === 0).sort((a, b) => level(b) - level(a) || b.skill - a.skill);
+  const avail = club.squad.filter((p) => p.out === 0 && !p.resting).sort((a, b) => level(b) - level(a) || b.skill - a.skill);
   const used = new Set<number>();
   const slots: Slot[] = [];
   const need: [Pos, number][] = [['MV', 1], ['PU', f.PU], ['KK', f.KK], ['HY', f.HY]];
@@ -486,7 +487,7 @@ function startSeason(s: GameState) {
 export function createGame(config: GameConfig): GameState {
   const s: GameState = {
     version: STATE_VERSION,
-    seed: config.seed | 0, nextId: 1, clubs: [], humans: [], bankrupt: [], order: [], season: 1, seasons: config.seasons, round: 0,
+    seed: config.seed | 0, nextId: 1, clubs: [], humans: [], bankrupt: [], order: [], season: 1, round: 0,
     schedule: [], cup: [], qualified: [], euro: [], names: { first: [], last: [], foreign: [] }, deck: [], phase: 'roll', die: null, pending: null, notice: null, calendar: [], week: 0, results: null,
     seasonSummary: null, log: [],
   };
@@ -504,7 +505,6 @@ export function createGame(config: GameConfig): GameState {
       formation: human ? '4-4-2' : pick(s, ['4-4-2', '4-3-3', '4-4-2', '5-3-2'] as FormationId[]),
       boardPos: 0,
       morale: 0,
-      vp: 0,
     });
     if (human) s.humans.push(i);
   }
@@ -714,6 +714,8 @@ function playMatchday(s: GameState) {
     for (const comp of s.euro) playEuroRound(s, comp, week.index);
     restOthers(s, s.euro.flatMap((comp) => comp.rounds[week.index]));
   }
+  // A rest lasts for one week's match.
+  for (const c of s.clubs) for (const p of c.squad) delete p.resting;
   s.results = week;
   s.phase = 'matchday';
   s.notice = null;
@@ -768,12 +770,10 @@ function playCupRound(s: GameState, cupRound: number) {
   if (winners[0].clubId !== null) {
     const c = club(s, winners[0].clubId);
     c.cash += CUP_PRIZE.winner;
-    c.vp += CUP_VP.winner;
   }
   if (loser.clubId !== null) {
     const c = club(s, loser.clubId);
     c.cash += CUP_PRIZE.finalist;
-    c.vp += CUP_VP.finalist;
   }
   log(s, `${entrantName(s, winners[0])} voittaa cupin.`);
 }
@@ -827,18 +827,17 @@ function playEuroRound(s: GameState, comp: EuroComp, round: number) {
   const final = ties[0];
   const loser = final.winner === 'a' ? final.b : final.a;
   if (winners[0].clubId !== null) {
-    club(s, winners[0].clubId).vp += info.vp.winner;
+    club(s, winners[0].clubId).cash += info.title.winner;
     log(s, `${club(s, winners[0].clubId).name} voittaa kilpailun ${info.name}.`);
   }
-  if (loser.clubId !== null) club(s, loser.clubId).vp += info.vp.finalist;
+  if (loser.clubId !== null) club(s, loser.clubId).cash += info.title.finalist;
 }
 
 function endSeason(s: GameState) {
   s.seasonSummary = table(s).map((row, i) => {
     const c = club(s, row.id);
     c.cash += LEAGUE_PRIZE[i];
-    c.vp += LEAGUE_VP[i];
-    return { id: row.id, pos: i + 1, prize: LEAGUE_PRIZE[i], vp: LEAGUE_VP[i] };
+    return { id: row.id, pos: i + 1, prize: LEAGUE_PRIZE[i] };
   });
   const ids = s.seasonSummary.map((row) => row.id);
   s.qualified = [[ids[0]], [ids[1]], [ids[2], ids[3]]];
@@ -861,10 +860,9 @@ function nextSeason(s: GameState) {
   startSeason(s);
 }
 
-/** Victory points plus one point per full 100 000 € in the bank. Debt costs points. */
-export function finalScore(c: Club): number {
-  return c.vp + Math.floor(c.cash / 100);
-}
+export const squadValue = (c: Club) => c.squad.reduce((sum, p) => sum + playerValue(p.skill, p.spirit), 0);
+/** What decides the game when the managers choose to count up: cash plus the value of the squad. */
+export const wealth = (c: Club) => c.cash + squadValue(c);
 
 function endTurn(s: GameState) {
   s.order.shift();
@@ -980,6 +978,15 @@ export function reduce(state: GameState, action: Action): GameState {
       return s;
     }
 
+    case 'REST': {
+      if (!inTurn || p) return state;
+      const player = me.squad.find((x) => x.id === action.playerId);
+      if (!player) return state;
+      if (player.resting) delete player.resting;
+      else player.resting = true;
+      return s;
+    }
+
     case 'BANKRUPT':
       if (!inTurn || p || !isBroke(me)) return state;
       goBankrupt(s, me);
@@ -1000,10 +1007,15 @@ export function reduce(state: GameState, action: Action): GameState {
         return s;
       }
       if (s.phase === 'seasonEnd') {
-        if (s.season >= s.seasons || s.humans.length === 0) s.phase = 'gameOver';
+        if (s.humans.length === 0) s.phase = 'gameOver';
         else nextSeason(s);
         return s;
       }
       return state;
+
+    case 'FINISH':
+      if (s.phase !== 'seasonEnd') return state;
+      s.phase = 'gameOver';
+      return s;
   }
 }

@@ -174,16 +174,17 @@ export interface EuroCompInfo {
   entry: number;
   /** Paid for each tie won. */
   win: number;
-  vp: { winner: number; finalist: number };
+  /** Prize money for the winner and the losing finalist. */
+  title: { winner: number; finalist: number };
   /** Average player level of the foreign clubs: [min, max]. */
   level: [number, number];
 }
 
 /** Index 0 is for the league champion, 1 for the runner-up, 2 for the third and fourth. */
 export const EURO_COMPS: EuroCompInfo[] = [
-  { name: 'Mestarien cup', entry: 60, win: 50, vp: { winner: 8, finalist: 4 }, level: [6, 7.5] },
-  { name: 'Eurooppa-cup', entry: 40, win: 35, vp: { winner: 6, finalist: 3 }, level: [5.5, 6.5] },
-  { name: 'Haastajacup', entry: 25, win: 25, vp: { winner: 4, finalist: 2 }, level: [5, 6] },
+  { name: 'Mestarien cup', entry: 60, win: 50, title: { winner: 150, finalist: 50 }, level: [6, 7.5] },
+  { name: 'Eurooppa-cup', entry: 40, win: 35, title: { winner: 100, finalist: 35 }, level: [5.5, 6.5] },
+  { name: 'Haastajacup', entry: 25, win: 25, title: { winner: 70, finalist: 25 }, level: [5, 6] },
 ];
 export const EURO_ROUND_NAMES = ['Puolivälierät', 'Välierät', 'Loppuottelu'];
 

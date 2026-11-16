@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
-  CUP_AFTER, ROUNDS, currentClubId, finalScore, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type Tie,
+  CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
+  EURO_AFTER, MIN_SQUAD, TIRED_AT, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -145,7 +145,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     <>
       <div className="sheet-head">
         <h2 className="display">{club.name}</h2>
-        <span className="muted">Sarjassa {position(game, viewId)}. · {finalScore(club)} {finalScore(club) === 1 ? 'piste' : 'pistettä'}</span>
+        <span className="muted">Sarjassa {position(game, viewId)}. · varallisuus {fmt(wealth(club))}</span>
       </div>
       {game.humans.length > 1 && (
         <div className="chips">
@@ -220,7 +220,9 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                 <td className={p.fitness <= TIRED_AT ? 'neg' : ''}>{p.fitness}</td>
                 <td>{p.spirit}</td>
                 <td className="left small">
-                  {p.out > 0
+                  {p.resting
+                    ? 'Lepää tämän viikon'
+                    : p.out > 0
                     ? <span className="neg">{p.outReason === 'ban' ? 'Pelikielto' : 'Loukkaantunut'}, {p.out} ott.</span>
                     : slot
                       ? slot.pos === p.pos ? 'Avaus' : `Avaus: ${slot.pos}, teho ${slot.eff}`
@@ -232,7 +234,17 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                     </span>
                   )}
                 </td>
-                <td>
+                <td className="actions">
+                  {canEdit && p.out === 0 && (
+                    <button
+                      className="tiny"
+                      aria-pressed={!!p.resting}
+                      title="Lepäävä pelaaja jää pois tämän viikon ottelusta ja saa kolme kuntopistettä"
+                      onClick={() => dispatch({ type: 'REST', playerId: p.id })}
+                    >
+                      {p.resting ? 'Peru lepo' : 'Lepuuta'}
+                    </button>
+                  )}
                   {canSell && club.squad.length > MIN_SQUAD && (
                     <button className="tiny" title="Myy pelaaja pankille" onClick={() => dispatch({ type: 'SELL', playerId: p.id })}>
                       Myy {fmt(sellPrice(p))}
@@ -246,7 +258,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
       </table>
       </div>
       <p className="muted small">
-        Avauskokoonpano valitaan automaattisesti taidon mukaan. Väärällä paikalla pelaava pelaa puolella teholla.
+        Avauskokoonpano valitaan automaattisesti taidon mukaan; omalla vuorollasi voit lepuuttaa pelaajan tämän viikon ottelusta. Väärällä paikalla pelaava pelaa puolella teholla.
         Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Cup- ja
         eurocupviikot siis kuluttavat: pelaaja palautuu vasta, kun hän lepää yhden ottelun. Kun
         kunto on enintään {TIRED_AT}, taito laskee yhdellä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,

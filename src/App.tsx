@@ -49,7 +49,7 @@ export default function App() {
       <header className="topbar">
         <h1><Wordmark /></h1>
         <div className="topbar-info">
-          <span>Kausi {game.season}/{game.seasons}</span>
+          <span>Kausi {game.season}</span>
           <span>
             {week?.kind === 'cup' ? `Cup: ${CUP_ROUND_NAMES[week.index]}`
               : week?.kind === 'euro' ? `Eurocupit: ${EURO_ROUND_NAMES[week.index]}`
@@ -81,7 +81,9 @@ export default function App() {
         <Sidebar key={actingClubId(game)} game={game} dispatch={dispatch} />
       </main>
       {game.phase === 'matchday' && <MatchdayResults game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} />}
-      {game.phase === 'seasonEnd' && <SeasonEnd game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} />}
+      {game.phase === 'seasonEnd' && (
+        <SeasonEnd game={game} onContinue={() => dispatch({ type: 'CONTINUE' })} onFinish={() => dispatch({ type: 'FINISH' })} />
+      )}
       {game.phase === 'gameOver' && <GameOver game={game} onNewGame={quit} />}
     </div>
   );

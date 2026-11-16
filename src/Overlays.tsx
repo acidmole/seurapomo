@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ClubName, EuroTies, FixtureList, Standings, Ties } from './Sidebar';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, fmt } from './game/data';
-import { finalScore, type GameState } from './game/engine';
+import { squadValue, wealth, type GameState } from './game/engine';
 
 function Overlay({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -52,13 +52,41 @@ export function MatchdayResults({ game, onContinue }: { game: GameState; onConti
   );
 }
 
-export function SeasonEnd({ game, onContinue }: { game: GameState; onContinue: () => void }) {
-  const last = game.season >= game.seasons;
+function WealthTable({ game }: { game: GameState }) {
+  const ranking = game.humans.map((id) => game.clubs[id]).sort((a, b) => wealth(b) - wealth(a) || b.cash - a.cash);
+  return (
+    <table className="table">
+      <thead>
+        <tr><th>#</th><th className="left">Manageri</th><th>Kassa</th><th>Pelaajien arvo</th><th>Yhteensä</th></tr>
+      </thead>
+      <tbody>
+        {ranking.map((c, i) => (
+          <tr key={c.id}>
+            <td>{i + 1}</td>
+            <td className="left"><ClubName game={game} id={c.id} /></td>
+            <td>{fmt(c.cash)}</td>
+            <td>{fmt(squadValue(c))}</td>
+            <td><strong>{fmt(wealth(c))}</strong></td>
+          </tr>
+        ))}
+        {[...game.bankrupt].reverse().map((id, i) => (
+          <tr key={id} className="bench">
+            <td>{ranking.length + i + 1}</td>
+            <td className="left">{game.clubs[id].name}</td>
+            <td colSpan={3}>Konkurssi</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+export function SeasonEnd({ game, onContinue, onFinish }: { game: GameState; onContinue: () => void; onFinish: () => void }) {
   return (
     <Overlay title={`Kausi ${game.season} on päättynyt`}>
       <table className="table">
         <thead>
-          <tr><th>#</th><th className="left">Joukkue</th><th>Palkintoraha</th><th>Pisteet</th>{!last && <th className="left">Ensi kaudella</th>}</tr>
+          <tr><th>#</th><th className="left">Joukkue</th><th>Palkintoraha</th><th className="left">Ensi kaudella</th></tr>
         </thead>
         <tbody>
           {game.seasonSummary!.map((row) => (
@@ -66,48 +94,31 @@ export function SeasonEnd({ game, onContinue }: { game: GameState; onContinue: (
               <td>{row.pos}</td>
               <td className="left"><ClubName game={game} id={row.id} /></td>
               <td>{fmt(row.prize)}</td>
-              <td><strong>+{row.vp}</strong></td>
-              {!last && <td className="left small">{row.pos <= 4 ? EURO_COMPS[Math.min(row.pos - 1, 2)].name : ''}</td>}
+              <td className="left small">{row.pos <= 4 ? EURO_COMPS[Math.min(row.pos - 1, 2)].name : ''}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <button className="primary big" onClick={onContinue}>{last ? 'Lopputulokset' : `Aloita kausi ${game.season + 1}`}</button>
+      <h3>Tilanne, jos pisteet lasketaan nyt</h3>
+      <WealthTable game={game} />
+      <p className="muted small">Voittaja on se, jolla on eniten rahaa, kun kassaan lisätään pelaajien arvo.</p>
+      <div className="row modal-actions">
+        <button className="big" onClick={onFinish}>Laske pisteet</button>
+        <button className="primary big" onClick={onContinue}>Vielä yksi kausi!</button>
+      </div>
     </Overlay>
   );
 }
 
 export function GameOver({ game, onNewGame }: { game: GameState; onNewGame: () => void }) {
-  const ranking = game.humans.map((id) => game.clubs[id]).sort((a, b) => finalScore(b) - finalScore(a) || b.cash - a.cash);
+  const winner = game.humans.map((id) => game.clubs[id]).sort((a, b) => wealth(b) - wealth(a) || b.cash - a.cash)[0];
   return (
-    <Overlay title={ranking.length ? `${ranking[0].name} voittaa` : 'Kaikki managerit menivät konkurssiin'}>
+    <Overlay title={winner ? `${winner.name} voittaa` : 'Kaikki managerit menivät konkurssiin'}>
       <p className="muted">
-        Pisteitä saa sarjasijoituksista, cupista ja eurocupeista. Lisäksi jokainen täysi 100 000 € kassassa on yhden pisteen arvoinen,
-        ja velkaantunut manageri joutuu myymään pelaajiaan.
+        Peli päättyi {game.season} kauden jälkeen. Voittaja on se, jolla on eniten rahaa, kun kassaan lisätään
+        pelaajien arvo.
       </p>
-      <table className="table">
-        <thead>
-          <tr><th>#</th><th className="left">Manageri</th><th>Kilpailut</th><th>Kassa</th><th>Yhteensä</th></tr>
-        </thead>
-        <tbody>
-          {ranking.map((c, i) => (
-            <tr key={c.id}>
-              <td>{i + 1}</td>
-              <td className="left"><ClubName game={game} id={c.id} /></td>
-              <td>{c.vp}</td>
-              <td>{fmt(c.cash)}</td>
-              <td><strong>{finalScore(c)}</strong></td>
-            </tr>
-          ))}
-          {[...game.bankrupt].reverse().map((id, i) => (
-            <tr key={id} className="bench">
-              <td>{ranking.length + i + 1}</td>
-              <td className="left">{game.clubs[id].name}</td>
-              <td colSpan={3}>Konkurssi</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <WealthTable game={game} />
       <button className="primary big" onClick={onNewGame}>Uusi peli</button>
     </Overlay>
   );

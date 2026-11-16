@@ -91,10 +91,20 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             Sponsori maksaa hinnasta {fmt(p.subsidy.amount)}, jos {game.clubs[p.subsidy.club].name} voittaa.
           </p>
         )}
-        <div className="bidder">
-          <span className="dot" style={{ background: bidder.color }} />
-          <span>Tarjousvuorossa <strong>{bidder.name}</strong> (kassa {fmt(bidder.cash)})</span>
-        </div>
+        <ul className="bidders" aria-label="Huutajat ja kassat">
+          {game.humans.map((id) => {
+            const c = game.clubs[id];
+            const status = id === bidder.id ? 'Tarjousvuorossa' : id === p.leader ? 'Korkein tarjous' : p.active.includes(id) ? 'Mukana' : 'Luopunut';
+            return (
+              <li key={id} className={id === bidder.id ? 'bidder bidder-turn' : p.active.includes(id) ? 'bidder' : 'bidder bidder-out'}>
+                <span className="dot" style={{ background: c.color }} />
+                <strong>{c.name}</strong>
+                <span className="bidder-cash">{fmt(c.cash)}</span>
+                <span className="bidder-status">{status}</span>
+              </li>
+            );
+          })}
+        </ul>
         {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat tarjota.</p>}
         {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia oikealta ja tarjota sitten.</p>}
         <div className="row">

@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import {
-  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, wealth, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
-function newGame(humans: number, seasons = 1, seed = 1): GameState {
+function newGame(humans: number, seed = 1): GameState {
   return createGame({
     clubs: Array.from({ length: humans }, (_, i) => ({ name: `Seura ${i + 1}`, color: HUMAN_COLORS[i] })),
-    seasons,
     seed,
   });
 }
@@ -42,9 +41,10 @@ function bot(s: GameState): Action {
   return { type: 'CONTINUE' };
 }
 
-function playOut(s: GameState): GameState {
-  for (let i = 0; i < 20000 && s.phase !== 'gameOver'; i++) {
-    const next = reduce(s, bot(s));
+/** Plays on until the managers count up after the given season, or all go bankrupt. */
+function playOut(s: GameState, seasons = 1): GameState {
+  for (let i = 0; i < 40000 && s.phase !== 'gameOver'; i++) {
+    const next = reduce(s, s.phase === 'seasonEnd' && s.season >= seasons ? { type: 'FINISH' } : bot(s));
     expect(next).not.toBe(s);
     s = next;
   }
@@ -53,7 +53,7 @@ function playOut(s: GameState): GameState {
 
 describe('names', () => {
   it('gives every player in a club a different first and last name, with a few foreigners in the league', () => {
-    const s = newGame(2, 1, 21);
+    const s = newGame(2, 21);
     for (const c of s.clubs) {
       const finnish = c.squad.map((p) => p.name).filter((n) => !FOREIGN_NAMES.includes(n));
       expect(new Set(finnish.map((n) => n.split(' ')[1])).size).toBe(finnish.length);
@@ -81,7 +81,7 @@ describe('schedule', () => {
 describe('ticket income', () => {
   it('pays the home club and grows with league position', () => {
     expect(gateIncome(1, 2)).toBeGreaterThan(gateIncome(8, 7));
-    let s = newGame(2, 1, 7);
+    let s = newGame(2, 7);
     const before = s.clubs.map((c) => c.cash);
     while (s.phase !== 'matchday') s = reduce(s, bot(s));
     for (const f of s.schedule[0]) {
@@ -98,7 +98,7 @@ describe('cards', () => {
     CARDS.findIndex((c, i) => c.kind === kind && extra(i));
 
   it.each(CARDS.map((c, i) => [i, c.kind]))('card %i (%s) can be played and the turn finished', (index) => {
-    let s = playCardNow(newGame(3, 1, 9), index);
+    let s = playCardNow(newGame(3, 9), index);
     expect(s.notice!.lines.length).toBeGreaterThan(0);
     for (let i = 0; i < 50 && s.pending; i++) s = reduce(s, bot(s));
     expect(s.pending).toBeNull();
@@ -107,7 +107,7 @@ describe('cards', () => {
   });
 
   it('draws from a shuffled deck without repeats', () => {
-    let s = newGame(2, 1, 3);
+    let s = newGame(2, 3);
     while (s.deck.length === 0) s = reduce(s, bot(s));
     expect(s.deck).toHaveLength(CARDS.length - 1);
     expect(new Set(s.deck).size).toBe(s.deck.length);
@@ -115,7 +115,7 @@ describe('cards', () => {
 
   it('lets a sponsor pay part of the price only for the club that drew the card', () => {
     const index = find('auction', (i) => (CARDS[i] as { subsidy: number }).subsidy > 0);
-    let s = playCardNow(newGame(2, 1, 9), index);
+    let s = playCardNow(newGame(2, 9), index);
     const me = currentClubId(s);
     const cash = s.clubs[me].cash;
     if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
@@ -128,7 +128,7 @@ describe('cards', () => {
 
   it('gives temporary form that wears off after the stated number of league rounds', () => {
     const index = CARDS.findIndex((c) => c.kind === 'form' && c.amount === 3 && c.matches === 2);
-    let s = playCardNow(newGame(2, 1, 9), index);
+    let s = playCardNow(newGame(2, 9), index);
     const me = currentClubId(s);
     const player = s.clubs[me].squad.find((p) => p.form)!;
     expect(level(player)).toBe(Math.min(MAX_LEVEL, player.skill + 3));
@@ -142,13 +142,13 @@ describe('cards', () => {
   });
 
   it('can also pull a player down', () => {
-    const s = playCardNow(newGame(2, 1, 9), CARDS.findIndex((c) => c.kind === 'form' && c.amount < 0));
+    const s = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'form' && c.amount < 0));
     const player = s.clubs[currentClubId(s)].squad.find((p) => p.form)!;
     expect(level(player)).toBeLessThan(player.skill);
   });
 
   it('makes a starter leave for his full value', () => {
-    const start = newGame(2, 1, 9);
+    const start = newGame(2, 9);
     const me = currentClubId(start);
     const starters = lineup(start.clubs[me]).slots.map((x) => x.player!);
     const s = playCardNow(start, find('leave'));
@@ -159,7 +159,7 @@ describe('cards', () => {
   });
 
   it('gives a free training camp', () => {
-    let s = playCardNow(newGame(2, 1, 9), find('freeTraining'));
+    let s = playCardNow(newGame(2, 9), find('freeTraining'));
     s.clubs[currentClubId(s)].cash = -50; // even a club in debt can use it
     const me = s.clubs[currentClubId(s)];
     const player = me.squad[0];
@@ -170,7 +170,7 @@ describe('cards', () => {
   });
 
   it('moves to the nearest square of the kind the card names', () => {
-    const start = newGame(2, 1, 9);
+    const start = newGame(2, 9);
     const s = playCardNow(start, find('goto'));
     const pos = s.clubs[currentClubId(s)].boardPos;
     expect(BOARD[pos]).toBe('training');
@@ -179,7 +179,7 @@ describe('cards', () => {
   });
 
   it('pays the birthday gift from every other manager', () => {
-    const start = newGame(4, 1, 9);
+    const start = newGame(4, 9);
     const s = playCardNow(start, find('collect'));
     const me = currentClubId(s);
     expect(s.clubs[me].cash).toBe(start.clubs[me].cash + 30);
@@ -205,14 +205,14 @@ describe('match model', () => {
   });
 
   it('never lets a player go above the maximum level', () => {
-    const s = playOut(newGame(3, 2, 5));
+    const s = playOut(newGame(3, 5), 2);
     expect(Math.max(...s.clubs.flatMap((c) => c.squad.map((p) => p.skill)))).toBeLessThanOrEqual(MAX_LEVEL);
   });
 });
 
 describe('debt', () => {
   const inDebt = (humans: number, squadSize: number) => {
-    const s = playCardNow(newGame(humans, 1, 9), CARDS.findIndex((c) => c.kind === 'morale'));
+    const s = playCardNow(newGame(humans, 9), CARDS.findIndex((c) => c.kind === 'morale'));
     const me = s.clubs[currentClubId(s)];
     me.cash = -30;
     me.squad.length = squadSize;
@@ -229,7 +229,7 @@ describe('debt', () => {
   });
 
   it('lets a manager sell in the middle of an offer to raise the money', () => {
-    let s = playCardNow(newGame(2, 1, 9), CARDS.findIndex((c) => c.kind === 'auction'));
+    let s = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'auction'));
     if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
     const bidder = s.clubs[s.pending.active[s.pending.idx]];
     bidder.cash = 0;
@@ -242,7 +242,7 @@ describe('debt', () => {
     const after = reduce(s, { type: 'BID', amount: min });
     expect(after.pending?.kind === 'auction' && after.pending.leader).toBe(bidder.id);
 
-    let scout = playCardNow(newGame(2, 1, 9), CARDS.findIndex((c) => c.kind === 'goto' && c.square === 'scout'));
+    let scout = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'goto' && c.square === 'scout'));
     const me = scout.clubs[currentClubId(scout)];
     scout = reduce(scout, { type: 'SELL', playerId: me.squad[0].id });
     expect(scout.pending?.kind).toBe('scout');
@@ -293,7 +293,7 @@ describe('fitness and sisu', () => {
   });
 
   it('keeps league starters level, rests the bench and wears down cup starters', () => {
-    let s = newGame(2, 1, 4);
+    let s = newGame(2, 4);
     const starters = new Set(lineup(s.clubs[0]).slots.map((x) => x.player!.id));
     for (const p of s.clubs[0].squad) p.fitness = 5;
     while (s.phase !== 'matchday') s = reduce(s, bot(s));
@@ -305,6 +305,23 @@ describe('fitness and sisu', () => {
     while (s.results?.kind !== 'cup') s = reduce(s, bot(s));
     const inCup = s.cup[0].flatMap((t) => [t.a.clubId, t.b.clubId]);
     expect(s.clubs.filter((c) => inCup.includes(c.id)).every((c) => c.squad.some((p) => p.fitness <= 6))).toBe(true);
+  });
+
+  it('lets a manager rest a player for one week', () => {
+    let s = newGame(2, 4);
+    const me = currentClubId(s);
+    const star = lineup(s.clubs[me]).slots[1].player!;
+    s.clubs[me].squad.find((p) => p.id === star.id)!.fitness = 6;
+    s = reduce(s, { type: 'REST', playerId: star.id });
+    expect(lineup(s.clubs[me]).slots.some((x) => x.player?.id === star.id)).toBe(false);
+    expect(reduce(reduce(s, { type: 'REST', playerId: star.id }), { type: 'REST', playerId: star.id })).toEqual(s);
+
+    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    const after = s.clubs[me].squad.find((p) => p.id === star.id);
+    if (after) {
+      expect(after.fitness).toBe(9);
+      expect(after.resting).toBeUndefined();
+    }
   });
 
   it('counts sisu only in a tough spot', () => {
@@ -338,7 +355,7 @@ describe('lineup', () => {
 
 describe('calendar', () => {
   it('gives every cup and European round a week of its own', () => {
-    let s = newGame(2, 1, 5);
+    let s = newGame(2, 5);
     for (const id of s.humans) s.clubs[id].cash = 5000; // nobody goes bankrupt before the season is over
     expect(s.calendar.filter((w) => w.kind === 'league')).toHaveLength(ROUNDS);
     expect(s.calendar.filter((w) => w.kind === 'cup').map((w) => w.index)).toEqual([0, 1, 2, 3, 4]);
@@ -373,18 +390,34 @@ describe('cup', () => {
   });
 
   it('gives clubs without a European tie that week their fitness back', () => {
-    let s = newGame(2, 1, 6);
+    let s = newGame(2, 6);
     while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
     expect(s.round).toBe(EURO_AFTER[0] + 1);
     for (const id of s.humans) expect(s.clubs[id].squad.every((p) => p.fitness === 9)).toBe(true);
   });
 });
 
+describe('ending the game', () => {
+  it('goes on for as long as the managers want and is decided by cash plus squad value', () => {
+    let s = newGame(2, 8);
+    for (const id of s.humans) s.clubs[id].cash = 5000;
+    while (s.phase !== 'seasonEnd') s = reduce(s, bot(s));
+    expect(reduce(s, { type: 'CONTINUE' }).season).toBe(2);
+    expect(reduce(s, { type: 'ROLL' })).toBe(s);
+
+    const done = reduce(s, { type: 'FINISH' });
+    expect(done.phase).toBe('gameOver');
+    const club = done.clubs[done.humans[0]];
+    expect(wealth(club)).toBe(club.cash + club.squad.reduce((sum, p) => sum + playerValue(p.skill, p.spirit), 0));
+    expect(reduce(newGame(2), { type: 'FINISH' }).phase).toBe('roll');
+  });
+});
+
 describe('full game', () => {
   it.each([2, 4, 6])('finishes with %i managers', (humans) => {
-    const start = newGame(humans, 2, humans);
+    const start = newGame(humans, humans);
     for (const id of start.humans) start.clubs[id].cash = 5000; // rich enough that nobody drops out early
-    const s = playOut(start);
+    const s = playOut(start, 2);
     expect(s.phase).toBe('gameOver');
     expect(s.season).toBe(2);
     expect(table(s).every((r) => r.p === ROUNDS)).toBe(true);
@@ -398,7 +431,7 @@ describe('full game', () => {
   });
 
   it('sends the top four to Europe from the second season on', () => {
-    let s = newGame(3, 2, 11);
+    let s = newGame(3, 11);
     const first = s.euro.flatMap((comp) => comp.rounds[0].flatMap((t) => [t.a.clubId, t.b.clubId])).filter((id) => id !== null);
     expect(first).toHaveLength(4);
     expect(first.every((id) => !s.clubs[id].human)).toBe(true);
@@ -410,7 +443,7 @@ describe('full game', () => {
     const entrants = s.euro.map((comp) => comp.rounds[0].flatMap((t) => [t.a.clubId, t.b.clubId]).filter((id) => id !== null));
     expect(entrants).toEqual([[top[0]], [top[1]], [top[2], top[3]]]);
 
-    s = playOut(s);
+    s = playOut(s, 2);
     for (const comp of s.euro) {
       expect(comp.rounds.map((r) => r.length)).toEqual([4, 2, 1]);
       expect(comp.rounds[2][0].winner).not.toBeNull();
@@ -418,13 +451,13 @@ describe('full game', () => {
   });
 
   it('is deterministic for a seed', () => {
-    expect(playOut(newGame(3, 1, 42))).toEqual(playOut(newGame(3, 1, 42)));
+    expect(playOut(newGame(3, 42))).toEqual(playOut(newGame(3, 42)));
   });
 
   it('keeps the economy playable', () => {
     const cash: number[] = [];
     for (let seed = 1; seed <= 30; seed++) {
-      const s = playOut(newGame(4, 1, seed));
+      const s = playOut(newGame(4, seed));
       for (const id of s.humans) cash.push(s.clubs[id].cash);
     }
     const mean = cash.reduce((a, b) => a + b, 0) / cash.length;
