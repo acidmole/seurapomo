@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { BOARD, SQUARE_INFO, fmt } from './game/data';
 import {
   MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, currentClubId, isBroke, mustSell, playerValue, trainingCost,
@@ -14,6 +14,35 @@ function cell(i: number): { gridRow: number; gridColumn: number } {
   if (i <= 12) return { gridRow: i - 5, gridColumn: 7 };
   if (i <= 18) return { gridRow: 7, gridColumn: 19 - i };
   return { gridRow: 25 - i, gridColumn: 1 };
+}
+
+/** Choosing a player to take from another club: pick the club, then the player. */
+function StealPanel({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
+  const me = currentClubId(game);
+  const others = game.clubs.filter((c) => c.id !== me);
+  const [clubId, setClubId] = useState(others[0].id);
+  const club = game.clubs[clubId];
+  const locked = club.squad.length <= MIN_SQUAD;
+  return (
+    <>
+      <p>Valitse seura ja pelaaja. Pelaaja siirtyy sinulle ilmaiseksi.</p>
+      <label className="formation">
+        <span className="label">Seura</span>
+        <select value={clubId} onChange={(e) => setClubId(Number(e.target.value))}>
+          {others.map((c) => <option key={c.id} value={c.id}>{c.name}{c.human ? ' (manageri)' : ''}</option>)}
+        </select>
+      </label>
+      {locked && <p className="muted small">Tässä seurassa on enää {MIN_SQUAD} pelaajaa, joten siltä ei voi viedä ketään.</p>}
+      <div className="scroll-list">
+        {[...club.squad].sort((a, b) => b.skill - a.skill).map((o) => (
+          <PlayerCard key={o.id} player={o}>
+            <button className="primary" disabled={locked} onClick={() => dispatch({ type: 'STEAL', clubId, playerId: o.id })}>Vie</button>
+          </PlayerCard>
+        ))}
+      </div>
+      <button onClick={() => dispatch({ type: 'SKIP' })}>Ei kiitos</button>
+    </>
+  );
 }
 
 function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
@@ -75,10 +104,16 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   } else if (p?.kind === 'auction') {
     const bidder = game.clubs[p.active[p.idx]];
     const min = p.leader === null ? p.minBid : p.bid + 5;
-    const bidderFull = bidder.squad.length >= MAX_SQUAD;
+    const bidderFull = bidder.squad.length >= MAX_SQUAD && bidder.id !== p.owner;
     body = (
       <>
         <PlayerCard player={p.player} />
+        {p.owner !== null && (
+          <p className="muted small">
+            Pelaaja kuuluu seuralle {game.clubs[p.owner].name}. Jos se voittaa, se maksaa uuden sopimuksen hinnan; jos
+            joku muu voittaa, kauppahinta menee sille.
+          </p>
+        )}
         <div className="auction-status">
           {p.leader === null ? (
             <span>Lähtöhinta <strong>{fmt(p.minBid)}</strong></span>
@@ -94,7 +129,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         <ul className="bidders" aria-label="Huutajat ja kassat">
           {game.humans.map((id) => {
             const c = game.clubs[id];
-            const status = id === bidder.id ? 'Tarjousvuorossa' : id === p.leader ? 'Korkein tarjous' : p.active.includes(id) ? 'Mukana' : 'Luopunut';
+            const status = id === bidder.id ? 'Tarjousvuorossa' : id === p.leader ? 'Korkein tarjous' : p.active.includes(id) ? 'Mukana' : 'Ei mukana';
             return (
               <li key={id} className={id === bidder.id ? 'bidder bidder-turn' : p.active.includes(id) ? 'bidder' : 'bidder bidder-out'}>
                 <span className="dot" style={{ background: c.color }} />
@@ -122,6 +157,8 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         </div>
       </>
     );
+  } else if (p?.kind === 'steal') {
+    body = <StealPanel game={game} dispatch={dispatch} />;
   } else if (p?.kind === 'scout') {
     body = (
       <>

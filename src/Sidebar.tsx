@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, FULL_TIME, MATCH_BONUS_COST, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
+  EURO_AFTER, FULL_TIME, cupGate, euroGate, MATCH_BONUS_COST, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -174,6 +174,9 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const knockout = week?.kind === 'cup' ? game.cup[week.index] : week?.kind === 'euro' ? game.euro.flatMap((c) => c.rounds[week.index]) : [];
   const tie = knockout.find((t) => t.a.clubId === viewId || t.b.clubId === viewId);
   const opponent = tie && entrantName(game, tie.a.clubId === viewId ? tie.b : tie.a);
+  const tieGate = !week || week.kind === 'league' ? 0
+    : week.kind === 'cup' ? cupGate(week.index)
+    : euroGate(game.euro.find((c) => c.rounds[week.index]?.includes(tie!))?.tier ?? 0, week.index);
   // Whoever the club meets this week, if it is a league club: its formation is worth knowing before choosing your own.
   const leagueFixture = week?.kind === 'league' ? game.schedule[week.index].find((f) => f.home === viewId || f.away === viewId) : undefined;
   const rivalId = leagueFixture ? (leagueFixture.home === viewId ? leagueFixture.away : leagueFixture.home)
@@ -201,7 +204,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
 
       <div className="stats">
         <div><span className="label">Kassa</span><strong className={club.cash < 0 ? 'neg' : ''}>{fmt(club.cash)}</strong></div>
-        <div><span className="label">Palkat</span><strong>{fmt(wages(club))}</strong></div>
+        <div><span className="label">Palkat / vko</span><strong>{fmt(wages(club))}</strong></div>
         <div><span className="label">Hyökkäys</span><strong>{xi.att}</strong></div>
         <div><span className="label">Keskikenttä</span><strong>{xi.mid}</strong></div>
         <div><span className="label">Puolustus</span><strong>{xi.def + xi.gk}</strong></div>
@@ -234,7 +237,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
       <p className="small">
         {week?.kind === 'cup' || week?.kind === 'euro' ? (
           opponent
-            ? <>Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupia'}: vastassa on {opponent}.</>
+            ? <>Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupia'}: vastassa on {opponent}. Lipputuloja kertyy {fmt(tieGate)}.</>
             : <span className="muted">Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupeja'}. Joukkueesi ei ole mukana, joten pelaajat lepäävät.</span>
         ) : nextHome
           ? <>Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}.</>
@@ -303,7 +306,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                       {p.resting ? 'Peru' : 'Lepo'}
                     </button>
                   )}
-                  {canSell && club.squad.length > MIN_SQUAD && (
+                  {canSell && club.squad.length > MIN_SQUAD && !(game.pending?.kind === 'auction' && game.pending.player.id === p.id) && (
                     <button className="tiny" title="Myy pelaaja pankille" onClick={() => dispatch({ type: 'SELL', playerId: p.id })}>
                       Myy {fmt(sellPrice(p))}
                     </button>

@@ -23,7 +23,10 @@ export function MatchdayResults({ game, onContinue }: { game: GameState; onConti
   const last = game.week === game.calendar.length - 1;
   const fixtures = r.kind === 'league' ? game.schedule[r.index] : [];
   const ties = r.kind === 'cup' ? game.cup[r.index] : r.kind === 'euro' ? game.euro.flatMap((comp) => comp.rounds[r.index]) : [];
-  const gates = fixtures.filter((f) => game.clubs[f.home].human && f.gate != null);
+  const gates = [
+    ...fixtures.filter((f) => game.clubs[f.home].human && f.gate != null).map((f) => ({ id: f.home, amount: f.gate! })),
+    ...ties.flatMap((t) => [t.a.clubId, t.b.clubId].flatMap((id) => (id !== null && game.clubs[id].human && t.gate ? [{ id, amount: t.gate }] : []))),
+  ];
 
   // The week is played out live only when a manager has a match in it, and not for people who ask for less motion.
   const human = (id: number | null) => id !== null && game.clubs[id].human;
@@ -65,10 +68,10 @@ export function MatchdayResults({ game, onContinue }: { game: GameState; onConti
           )}
           {gates.length > 0 && (
             <>
-              <h3>Kotiotteluiden lipputulot</h3>
+              <h3>{r.kind === 'league' ? 'Kotiotteluiden lipputulot' : 'Lipputulot'}</h3>
               <div className="gates">
-                {gates.map((f) => (
-                  <span key={f.home}><ClubName game={game} id={f.home} /> +{fmt(f.gate!)}</span>
+                {gates.map((g) => (
+                  <span key={g.id}><ClubName game={game} id={g.id} /> +{fmt(g.amount)}</span>
                 ))}
               </div>
             </>

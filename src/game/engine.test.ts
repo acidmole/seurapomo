@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import {
-  EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, currentClubId, duel, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, stoppageOdds, wealth, winStreak, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -28,6 +28,7 @@ function bot(s: GameState): Action {
     const index = me.squad.length < MAX_SQUAD ? p.options.findIndex((o) => playerValue(o.skill, o.spirit) + 100 <= me.cash) : -1;
     return index >= 0 ? { type: 'SCOUT_BUY', index } : { type: 'SKIP' };
   }
+  if (p?.kind === 'steal') return { type: 'SKIP' };
   if (p?.kind === 'training') {
     const best = [...me.squad].sort((a, b) => b.skill - a.skill).find((x) => x.skill < MAX_LEVEL && trainingCost(x) <= me.cash);
     return best ? { type: 'TRAIN', playerId: best.id } : { type: 'SKIP' };
@@ -104,6 +105,49 @@ describe('money for form and morale', () => {
   });
 });
 
+describe('cup and European ticket income', () => {
+  it('pays every league club in a cup tie, more in later rounds', () => {
+    let s = newGame(2, 5);
+    for (const id of s.humans) s.clubs[id].cash = 5000;
+    while (s.results?.kind !== 'cup') s = reduce(s, bot(s));
+    expect(s.cup[0].every((t) => t.gate === cupGate(0))).toBe(true);
+    expect(cupGate(4)).toBeGreaterThan(cupGate(0));
+  });
+
+  it('makes Europe the jackpot, the top competition most of all', () => {
+    expect(euroGate(0, 0)).toBeGreaterThan(euroGate(1, 0));
+    expect(euroGate(1, 0)).toBeGreaterThan(euroGate(2, 0));
+    expect(euroGate(2, 0)).toBeGreaterThan(cupGate(0));
+    expect(euroGate(0, 2)).toBeGreaterThan(euroGate(0, 0));
+
+    let s = newGame(2, 5);
+    for (const id of s.humans) s.clubs[id].cash = 5000;
+    const top = s.qualified[0][0];
+    while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
+    const before = s.clubs[top].cash;
+    const tie = s.euro[0].rounds[0].find((t) => t.a.clubId === top || t.b.clubId === top)!;
+    expect(tie.gate).toBe(euroGate(0, 0));
+    expect(before).toBeGreaterThan(0);
+  });
+});
+
+describe('wages', () => {
+  it('are paid every week at the start of the turn, and a lap of the board pays a bonus', () => {
+    const start = newGame(2, 3);
+    const me = currentClubId(start);
+    const weekly = wages(start.clubs[me]);
+    expect(weekly).toBeGreaterThan(0);
+    const rolled = reduce(start, { type: 'ROLL' });
+    expect(rolled.notice!.lines[0]).toContain('Viikon palkat');
+
+    // From the last square any roll completes the lap.
+    start.clubs[me].boardPos = BOARD.length - 1;
+    const lapped = reduce(start, { type: 'ROLL' });
+    expect(lapped.notice!.lines.some((line) => line.includes('kierrosbonuksen'))).toBe(true);
+    expect(lapped.clubs[me].boardPos).toBeLessThan(6);
+  });
+});
+
 describe('ticket income', () => {
   it('pays the home club and grows with league position', () => {
     expect(gateIncome(1, 2)).toBeGreaterThan(gateIncome(8, 7));
@@ -145,17 +189,22 @@ describe('cards', () => {
     expect(new Set(s.deck).size).toBe(s.deck.length);
   });
 
-  it('lets a sponsor pay part of the price only for the club that drew the card', () => {
+  it('keeps windfall auctions from the leader and lets a sponsor back the manager who is last', () => {
     const index = find('auction', (i) => (CARDS[i] as { subsidy: number }).subsidy > 0);
-    let s = playCardNow(newGame(2, 9), index);
-    const me = currentClubId(s);
-    const cash = s.clubs[me].cash;
+    const start = newGame(3, 9);
+    const [best, , worst] = standing(start);
+    let s = playCardNow(start, index);
     if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
+    // The best-placed manager is left out, and the sponsor backs the worst-placed one.
+    expect(s.pending.active).not.toContain(best);
+    expect(s.pending.subsidy).toEqual({ club: worst, amount: 30 });
     const bid = s.pending.minBid;
-    s = reduce(s, { type: 'BID', amount: bid });
-    s = reduce(s, { type: 'PASS' });
-    expect(s.pending).toBeNull();
-    expect(s.clubs[me].cash).toBe(cash - bid + 30);
+    const cash = s.clubs[worst].cash;
+    while (s.pending?.kind === 'auction') {
+      const bidder = s.pending.active[s.pending.idx];
+      s = reduce(s, bidder === worst && s.pending.leader === null ? { type: 'BID', amount: bid } : { type: 'PASS' });
+    }
+    expect(s.clubs[worst].cash).toBe(cash - bid + 30);
   });
 
   it('gives temporary form that wears off after the stated number of league rounds', () => {
@@ -188,6 +237,88 @@ describe('cards', () => {
     expect(gone).toHaveLength(1);
     expect(starters.some((p) => p.id === gone[0].id)).toBe(true);
     expect(s.clubs[me].cash).toBe(start.clubs[me].cash + playerValue(gone[0].skill, gone[0].spirit));
+  });
+
+  it('has bad luck that finds the leaders', () => {
+    const start = newGame(3, 9);
+    const drawer = currentClubId(start);
+    const leader = [...start.humans].sort((a, b) => table(start).findIndex((r) => r.id === a) - table(start).findIndex((r) => r.id === b))[0];
+    const star = [...start.clubs[leader].squad].sort((a, b) => b.skill - a.skill || b.spirit - a.spirit)[0];
+    const raided = playCardNow(start, find('raid'));
+    expect(raided.clubs[leader].squad.some((p) => p.id === star.id)).toBe(false);
+    expect(raided.clubs[leader].cash).toBe(start.clubs[leader].cash + Math.round(playerValue(star.skill, star.spirit) / 2));
+
+    const expired = playCardNow(start, find('expire'));
+    expect(expired.clubs[drawer].squad).toHaveLength(start.clubs[drawer].squad.length - 1);
+    expect(expired.clubs[drawer].cash).toBe(start.clubs[drawer].cash);
+
+    const out = playCardNow(start, find('leaderOut'));
+    expect(out.clubs[leader].squad.find((p) => p.id === star.id)!.out).toBeGreaterThan(0);
+
+    const last = standing(start)[2];
+    const gifted = playCardNow(start, find('prodigy'));
+    expect(gifted.clubs[last].squad).toHaveLength(start.clubs[last].squad.length + 1);
+    expect(gifted.clubs[last].squad.at(-1)!.skill).toBeGreaterThanOrEqual(6);
+
+    const drawn = playCardNow(start, find('luckyDraw'));
+    expect(drawn.clubs[drawer].squad).toHaveLength(start.clubs[drawer].squad.length + 1);
+
+    start.clubs[start.humans[2]].cash = 1000;
+    const taxed = playCardNow(start, find('wealthTax'));
+    expect(taxed.clubs[start.humans[2]].cash).toBe(850);
+  });
+
+  it('auctions the best player when his contract is re-negotiated', () => {
+    const start = playCardNow(newGame(3, 9), find('renegotiate'));
+    if (start.pending?.kind !== 'auction') throw new Error('expected an auction');
+    const owner = start.pending.owner!;
+    const star = start.pending.player;
+    const bid = start.pending.minBid;
+    expect(star.skill).toBe(Math.max(...start.clubs[owner].squad.map((p) => p.skill)));
+    expect(reduce(start, { type: 'SELL', playerId: star.id })).toBe(start);
+
+    // The owner bids and the others pass: he keeps the player and pays for the new contract.
+    let kept = reduce(start, { type: 'BID', amount: bid });
+    while (kept.pending) kept = reduce(kept, { type: 'PASS' });
+    expect(kept.clubs[owner].squad.some((p) => p.id === star.id)).toBe(true);
+    expect(kept.clubs[owner].cash).toBe(start.clubs[owner].cash - bid);
+
+    // The owner passes and a rival bids: the player moves and the owner is paid.
+    let lost = reduce(start, { type: 'PASS' });
+    if (lost.pending?.kind !== 'auction') throw new Error('expected an auction');
+    const rival = lost.pending.active[lost.pending.idx];
+    lost = reduce(lost, { type: 'BID', amount: bid });
+    while (lost.pending) lost = reduce(lost, { type: 'PASS' });
+    expect(lost.clubs[owner].squad.some((p) => p.id === star.id)).toBe(false);
+    expect(lost.clubs[rival].squad.some((p) => p.id === star.id)).toBe(true);
+    expect(lost.clubs[owner].cash).toBe(start.clubs[owner].cash + bid);
+    expect(lost.clubs[rival].cash).toBe(start.clubs[rival].cash - bid);
+
+    // Nobody bids: he stays where he is.
+    let nobody = start;
+    while (nobody.pending) nobody = reduce(nobody, { type: 'PASS' });
+    expect(nobody.clubs[owner].squad.some((p) => p.id === star.id)).toBe(true);
+  });
+
+  it('lets a manager who is not leading steal a player from any other club', () => {
+    const base = newGame(3, 9);
+    // The best-placed manager draws it in vain; move the turn to another manager to use it.
+    const leader = standing(base)[0];
+    const blocked = structuredClone(base);
+    blocked.order = [leader, ...base.humans.filter((id) => id !== leader)];
+    expect(playCardNow(blocked, find('steal')).pending).toBeNull();
+    base.order = [...base.humans.filter((id) => id !== leader), leader];
+    const me = currentClubId(base);
+    const s = playCardNow(base, find('steal'));
+    expect(s.pending).toEqual({ kind: 'steal' });
+    const victim = s.clubs.find((c) => c.id !== me && !c.human)!;
+    const target = victim.squad[0];
+    expect(reduce(s, { type: 'STEAL', clubId: me, playerId: s.clubs[me].squad[0].id })).toBe(s);
+    const done = reduce(s, { type: 'STEAL', clubId: victim.id, playerId: target.id });
+    expect(done.pending).toBeNull();
+    expect(done.clubs[me].squad.some((p) => p.id === target.id)).toBe(true);
+    expect(done.clubs[victim.id].squad.some((p) => p.id === target.id)).toBe(false);
+    expect(done.clubs[me].cash).toBe(s.clubs[me].cash);
   });
 
   it('gives a free training camp', () => {
@@ -272,7 +403,7 @@ describe('debt', () => {
   });
 
   it('lets a manager sell in the middle of an offer to raise the money', () => {
-    let s = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'auction'));
+    let s = playCardNow(newGame(3, 9), CARDS.findIndex((c) => c.kind === 'auction'));
     if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
     const bidder = s.clubs[s.pending.active[s.pending.idx]];
     bidder.cash = 0;

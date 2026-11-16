@@ -52,7 +52,7 @@ const PINSTRIPES = 'repeating-linear-gradient(90deg, #0b1a12 0 10px, #ffd23f 10p
 
 /** `icon` is an SVG path on a 24 × 24 grid; `pattern` is the shirt pattern behind it, one per group of squares. */
 export const SQUARE_INFO: Record<SquareType, { name: string; icon: string; pattern: string; help: string }> = {
-  start: { name: 'Palkkapäivä', pattern: PINSTRIPES, icon: 'M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0M15 8.5a4.5 4.5 0 1 0 0 7M7 11h6M7 13.5h5', help: 'Maksat palkat aina, kun ohitat tämän ruudun.' },
+  start: { name: 'Lähtö', pattern: PINSTRIPES, icon: 'M21 12a9 9 0 1 1-18 0a9 9 0 0 1 18 0M15 8.5a4.5 4.5 0 1 0 0 7M7 11h6M7 13.5h5', help: 'Saat kierrosbonuksen aina, kun ohitat tämän ruudun.' },
   auction: { name: 'Huuto\u00adkauppa', pattern: STRIPES, icon: 'm14 4 6 6M11 7l6 6M12.5 5.5l-5 5 3 3 5-5M9 13l-6 6M13 21h8', help: 'Valitset kahdesta pelaajasta toisen, ja kaikki managerit huutavat hänestä.' },
   scout: { name: 'Kykyjen\u00adetsijä', pattern: STRIPES, icon: 'M17 11a6 6 0 1 1-12 0a6 6 0 0 1 12 0M20 20l-4.5-4.5', help: 'Saat ostaa yhden kolmesta pelaajasta listahintaan.' },
   academy: { name: 'Akatemia', pattern: HOOPS, icon: 'm12 3 2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 16.9 6.6 19.8l1.1-6.1L3.2 9.4l6.1-.8z', help: 'Saat nuoren pelaajan ilmaiseksi.' },
@@ -74,6 +74,22 @@ export type Card =
   | { kind: 'ban'; text: string }
   /** A starter walks out; the club is paid his full value. */
   | { kind: 'leave'; text: string }
+  /** The best-placed manager in the league loses his best player for half his value, whoever drew the card. */
+  | { kind: 'raid'; text: string }
+  /** The best player of the best-placed manager misses this many league matches, injured or banned. */
+  | { kind: 'leaderOut'; reason: 'injury' | 'ban'; matches: number; text: string }
+  /** A good young player joins the worst-placed manager for free. */
+  | { kind: 'prodigy'; text: string }
+  /** Pure luck: the drawer gets whoever is on top of the player pile, weak or strong. */
+  | { kind: 'luckyDraw'; text: string }
+  /** The drawer's best player is auctioned among all managers; the drawer keeps him only by bidding the most. */
+  | { kind: 'renegotiate'; text: string }
+  /** The drawer takes any one player from another club for free. Not for the best-placed manager. */
+  | { kind: 'steal'; text: string }
+  /** The drawer's best player leaves for nothing. */
+  | { kind: 'expire'; text: string }
+  /** The manager with the most cash pays this share of it. */
+  | { kind: 'wealthTax'; share: number; text: string }
   | { kind: 'heal'; text: string }
   | { kind: 'morale'; amount: number; text: string }
   | { kind: 'spirit'; amount: number; text: string }
@@ -84,7 +100,10 @@ export type Card =
   | { kind: 'youth'; text: string }
   /** Every other manager pays `amount` to the one who drew the card. */
   | { kind: 'collect'; amount: number; text: string }
-  /** A player of level `min`–`max` goes under the hammer. `subsidy` is paid towards the price if the drawer wins. */
+  /**
+   * A player of level `min`–`max` goes under the hammer. The best-placed manager may not bid, and `subsidy` is
+   * paid towards the price if the worst-placed manager wins: windfalls are for those who are behind.
+   */
   | { kind: 'auction'; min: number; max: number; subsidy: number; text: string }
   /** Move forward to the nearest square of this type and resolve it. */
   | { kind: 'goto'; square: 'training' | 'scout'; text: string }
@@ -116,10 +135,21 @@ export const CARDS: Card[] = [
   { kind: 'fitness', text: 'Seura palkkaa kuntovalmentajan viikoksi. Koko joukkueen kunto palautuu täyteen.' },
   { kind: 'leave', text: '{p} on saanut tarpeekseen valmentajasta ja lähtee seurasta.' },
   { kind: 'leave', text: '{p} saa ulkomailta tarjouksen, josta ei voi kieltäytyä, ja lähtee.' },
+  { kind: 'raid', text: 'Ulkomainen suurseura on seurannut sarjan kärkeä ja tekee tarjouksen, josta ei voi kieltäytyä.' },
+  { kind: 'raid', text: 'Maajoukkueen valmentaja kehuu sarjan kärkiseuraa, ja agentit heräävät.' },
+  { kind: 'leaderOut', reason: 'injury', matches: 3, text: 'Kärkijoukkueen harjoituksissa otetaan liian tosissaan.' },
+  { kind: 'leaderOut', reason: 'ban', matches: 2, text: 'Sarjakärjen tähti menettää malttinsa ja näkee punaista.' },
+  { kind: 'prodigy', text: 'Lupaava nuori haluaa seuraan, jossa pääsee pelaamaan.' },
+  { kind: 'luckyDraw', text: 'Nostat pelaajapakan päällimmäisen kortin. Pelaaja liittyy joukkueeseesi, oli hän kuka tahansa.' },
+  { kind: 'luckyDraw', text: 'Vanha tuttu soittaa: hänen veljenpoikansa etsii seuraa. Otat hänet koeajalle näkemättä.' },
+  { kind: 'renegotiate', text: 'Parhaan pelaajasi agentti haluaa neuvotella sopimuksen uusiksi. Pelaajasta järjestetään huutokauppa: pidät hänet vain, jos tarjoat eniten.' },
+  { kind: 'steal', text: 'Tunnet oikeat ihmiset. Saat houkutella minkä tahansa pelaajan toisesta seurasta ilmaiseksi.' },
+  { kind: 'expire', text: 'Parhaan pelaajasi sopimus on päässyt umpeutumaan, ja hän kävelee ulos ilmaiseksi.' },
+  { kind: 'wealthTax', share: 0.15, text: 'Verotarkastaja kiinnostuu liigan rikkaimmasta seurasta.' },
   { kind: 'youth', text: 'Junioripäällikkö tuo harjoituksiin lupaavan nuoren. Hän liittyy joukkueeseen ilmaiseksi.' },
   { kind: 'collect', amount: 10, text: 'Seurasi täyttää pyöreitä vuosia, ja jokainen muu manageri tuo lahjan.' },
   { kind: 'auction', min: 5, max: 8, subsidy: 0, text: 'Pelaaja-agentti soittaa: vapaa pelaaja etsii seuraa. Hänestä järjestetään huutokauppa.' },
-  { kind: 'auction', min: 5, max: 8, subsidy: 30, text: 'Sponsori haluaa seuraan uuden kasvon. Pelaajasta järjestetään huutokauppa, ja sponsori maksaa osan hinnasta, jos sinä voitat.' },
+  { kind: 'auction', min: 5, max: 8, subsidy: 30, text: 'Sponsori haluaa auttaa sarjan häntäpäätä. Pelaajasta järjestetään huutokauppa, ja sponsori maksaa osan hinnasta, jos heikoiten sijoittunut manageri voittaa.' },
   { kind: 'auction', min: 8, max: 9, subsidy: 0, text: 'Ulkomainen tähtipelaaja haluaa muuttaa Suomeen. Hänestä järjestetään huutokauppa.' },
   { kind: 'goto', square: 'training', text: 'Valmentaja vaatii leiriä. Siirryt lähimmälle harjoitusleirille.' },
   { kind: 'goto', square: 'scout', text: 'Kykyjenetsijällä on kiireellistä asiaa. Siirryt hänen luokseen.' },
@@ -182,6 +212,8 @@ export interface EuroCompInfo {
   name: string;
   /** Paid to every league club that qualifies. */
   entry: number;
+  /** Ticket and television money for every tie played; it grows by a quarter each round. */
+  gate: number;
   /** Paid for each tie won. */
   win: number;
   /** Prize money for the winner and the losing finalist. */
@@ -192,9 +224,9 @@ export interface EuroCompInfo {
 
 /** Index 0 is for the league champion, 1 for the runner-up, 2 for the third and fourth. */
 export const EURO_COMPS: EuroCompInfo[] = [
-  { name: 'Mestarien cup', entry: 60, win: 50, title: { winner: 300, finalist: 100 }, level: [6, 7.5] },
-  { name: 'Eurooppa-cup', entry: 40, win: 35, title: { winner: 200, finalist: 70 }, level: [5.5, 6.5] },
-  { name: 'Haastajacup', entry: 25, win: 25, title: { winner: 140, finalist: 50 }, level: [5, 6] },
+  { name: 'Mestarien cup', gate: 80, entry: 60, win: 50, title: { winner: 300, finalist: 100 }, level: [6, 7.5] },
+  { name: 'Eurooppa-cup', gate: 45, entry: 40, win: 35, title: { winner: 200, finalist: 70 }, level: [5.5, 6.5] },
+  { name: 'Haastajacup', gate: 25, entry: 25, win: 25, title: { winner: 140, finalist: 50 }, level: [5, 6] },
 ];
 export const EURO_ROUND_NAMES = ['Puolivälierät', 'Välierät', 'Loppuottelu'];
 

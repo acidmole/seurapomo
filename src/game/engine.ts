@@ -3,7 +3,7 @@ import {
   type Card, type FormationId, type Pos, type Shape,
 } from './data';
 
-export const START_CASH = 80;
+export const START_CASH = 70;
 export const MAX_SQUAD = 20;
 /** A manager whose squad would fall below this is out of the game. */
 export const MIN_SQUAD = 11;
@@ -15,6 +15,11 @@ export const CUP_AFTER = [1, 4, 7, 11, 16];
 export const EURO_AFTER = [3, 9, 14];
 export const LEAGUE_PRIZE = [250, 170, 120, 90, 70, 50, 35, 25, 15, 0];
 export const CUP_PRIZE = { winner: 200, finalist: 80 };
+/** Ticket income for a league club from a cup tie: this much in the first round, and 5 more each round after. */
+export const CUP_GATE = 15;
+export const cupGate = (round: number) => CUP_GATE + 5 * round;
+/** Ticket and television money from a European tie. The top competition is where the real money is. */
+export const euroGate = (tier: number, round: number) => Math.round(EURO_COMPS[tier].gate * (1 + 0.25 * round));
 /** Promising the players a bonus costs this much and wins extra chances in the club's next match. */
 export const MATCH_BONUS_COST = 15;
 /** Extra ticket income per league win in a row, up to five. */
@@ -86,7 +91,7 @@ export interface Entrant { clubId: number | null; name: string; level: number; /
  * One knockout match. After a shoot-out (`pens`) the winner is credited with one extra goal, so the score
  * always shows who went through.
  */
-export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean; events?: MatchEvent[] }
+export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | null; winner: 'a' | 'b' | null; pens: boolean; events?: MatchEvent[]; /** Paid to each league club in the tie. */ gate?: number }
 export interface EuroComp { tier: number; rounds: Tie[][] }
 
 /** One week of the season. `index` is the round within that competition. */
@@ -98,7 +103,14 @@ export type Pending =
       kind: 'auction'; player: Player; minBid: number; bid: number; leader: number | null; active: number[]; idx: number;
       /** A sponsor pays this much of the price if this club wins. */
       subsidy: { club: number; amount: number } | null;
+      /**
+       * Set when the player already belongs to a manager (a contract re-negotiation). If the owner wins he
+       * pays the bid to keep him; if someone else wins, the owner is paid the bid.
+       */
+      owner: number | null;
     }
+  /** The manager may take any one player from another club. */
+  | { kind: 'steal' }
   | { kind: 'scout'; options: Player[] }
   | { kind: 'training'; free: boolean };
 
@@ -107,7 +119,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 18;
+export const STATE_VERSION = 22;
 
 export interface GameState {
   version: number;
@@ -156,6 +168,7 @@ export type Action =
   | { type: 'SCOUT_BUY'; index: number }
   | { type: 'TRAIN'; playerId: number }
   | { type: 'SKIP' }
+  | { type: 'STEAL'; clubId: number; playerId: number }
   | { type: 'SET_FORMATION'; formation: FormationId }
   | { type: 'SELL'; playerId: number }
   | { type: 'REST'; playerId: number }
@@ -211,8 +224,10 @@ export function level(p: Player): number {
 }
 export const sellPrice = (p: Player) => Math.round(playerValue(p.skill, p.spirit) * SELL_RATE);
 export const trainingCost = (p: Player) => 5 * p.skill;
-/** Paid on every payday, per level of skill in the squad. */
-export const WAGE_PER_LEVEL = 1.5;
+/** Paid at the start of every turn, per level of skill in the squad. */
+export const WAGE_PER_LEVEL = 0.27;
+/** Paid each time a manager completes a lap of the board. */
+export const LAP_BONUS = 25;
 export const wages = (c: Club) => Math.round(WAGE_PER_LEVEL * c.squad.reduce((sum, p) => sum + p.skill, 0));
 
 /** Draws from a shuffled pile of the list, so a name does not come round again until the pile is used up. */
@@ -575,10 +590,10 @@ export function createGame(config: GameConfig): GameState {
 
 // ---------- turn ----------
 
-function payday(s: GameState, c: Club, lines: string[]) {
+function payWages(c: Club, lines: string[]) {
   const w = wages(c);
   c.cash -= w;
-  lines.push(`Palkkapäivä: maksat palkkoja ${fmt(w)}.`);
+  lines.push(`Viikon palkat: maksat ${fmt(w)}.`);
 }
 
 function addYouth(s: GameState, c: Club, lines: string[]) {
@@ -591,11 +606,19 @@ function addYouth(s: GameState, c: Club, lines: string[]) {
   lines.push(`Joukkueeseen nousee ${p.name} (${POS_NAME[p.pos]}, taso ${p.skill}).`);
 }
 
-function startAuction(s: GameState, player: Player, starter: number, subsidy: { club: number; amount: number } | null) {
+/** Managers from best-placed to worst-placed in the league. Bad luck looks for the first, good luck for the last. */
+export const standing = (s: GameState) => [...s.humans].sort((a, b) => position(s, a) - position(s, b));
+
+function startAuction(
+  s: GameState, player: Player, starter: number, subsidy: { club: number; amount: number } | null,
+  barred: number | null = null, owner: number | null = null,
+) {
   const from = Math.max(0, s.humans.indexOf(starter));
-  const active = s.humans.map((_, i) => s.humans[(from + i) % s.humans.length]);
-  s.pending = { kind: 'auction', player, minBid: Math.round(playerValue(player.skill, player.spirit) / 10) * 5, bid: 0, leader: null, active, idx: 0, subsidy };
+  const active = s.humans.map((_, i) => s.humans[(from + i) % s.humans.length]).filter((id) => id !== barred);
+  s.pending = { kind: 'auction', player, minBid: Math.round(playerValue(player.skill, player.spirit) / 10) * 5, bid: 0, leader: null, active, idx: 0, subsidy, owner };
 }
+
+const bestPlayer = (c: Club) => [...c.squad].sort((a, b) => b.skill - a.skill || b.spirit - a.spirit)[0] as Player | undefined;
 
 function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
   const starters = lineup(c).slots.flatMap((x) => (x.player ? [x.player] : []));
@@ -623,6 +646,89 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
         lines.push(`Saat hänestä täyden hinnan, ${fmt(fee)}.`);
       }
       break;
+    case 'raid': {
+      // Success draws attention: the manager placed highest in the league is the one who loses a star.
+      const victim = club(s, standing(s)[0]);
+      const star = bestPlayer(victim);
+      if (!star || victim.squad.length <= MIN_SQUAD) {
+        lines.push(`${victim.name} on sarjan parhaiten sijoittunut manageriseura, mutta kauppaa ei synny.`);
+        break;
+      }
+      const fee = Math.round(playerValue(star.skill, star.spirit) / 2);
+      victim.squad.splice(victim.squad.indexOf(star), 1);
+      victim.cash += fee;
+      lines.push(`${victim.name} menettää parhaan pelaajansa: ${star.name} lähtee, ja seura saa vain puolet hänen arvostaan, ${fmt(fee)}.`);
+      break;
+    }
+    case 'leaderOut': {
+      const victim = club(s, standing(s)[0]);
+      const star = bestPlayer({ ...victim, squad: victim.squad.filter((p) => p.out === 0) });
+      if (!star) break;
+      star.out = card.matches;
+      star.outReason = card.reason;
+      lines.push(`${victim.name} on managereista parhaiten sijoittunut: ${star.name} ${card.reason === 'ban' ? 'saa pelikieltoa' : 'on sivussa'} ${card.matches} ottelua.`);
+      break;
+    }
+    case 'prodigy': {
+      const order = standing(s);
+      const lucky = club(s, order[order.length - 1]);
+      if (lucky.squad.length >= MAX_SQUAD) {
+        lines.push(`${lucky.name} on managereista heikoiten sijoittunut, mutta joukkue on täynnä.`);
+        break;
+      }
+      const p = newPlayer(s, randomPos(s), 6 + randInt(s, 2));
+      lucky.squad.push(p);
+      lines.push(`${lucky.name} on managereista heikoiten sijoittunut ja saa hänet ilmaiseksi: ${p.name} (${POS_NAME[p.pos]}, taito ${p.skill}).`);
+      break;
+    }
+    case 'luckyDraw': {
+      if (c.squad.length >= MAX_SQUAD) {
+        lines.push('Joukkue on täynnä, joten joudut kieltäytymään.');
+        break;
+      }
+      const p = newPlayer(s, randomPos(s), 2 + randInt(s, 7));
+      c.squad.push(p);
+      lines.push(`Joukkueeseen liittyy ${p.name} (${POS_NAME[p.pos]}, taito ${p.skill}).`);
+      break;
+    }
+    case 'renegotiate': {
+      const star = bestPlayer(c);
+      if (!star || c.squad.length <= MIN_SQUAD) {
+        lines.push('Joukkueessa on kuitenkin niin vähän pelaajia, että hän suostuu jatkamaan vanhalla sopimuksella.');
+        break;
+      }
+      lines.push(`Huutokaupattavana on ${star.name}.`);
+      startAuction(s, structuredClone(star), c.id, null, null, c.id);
+      break;
+    }
+    case 'steal': {
+      const order = standing(s);
+      if (order.length > 1 && order[0] === c.id) {
+        lines.push('Olet kuitenkin managereista parhaiten sijoittunut, eikä kukaan halua vahvistaa kärkiseuraa. Kortti raukeaa.');
+      } else if (c.squad.length >= MAX_SQUAD) {
+        lines.push('Joukkueesi on kuitenkin täynnä. Kortti raukeaa.');
+      } else {
+        s.pending = { kind: 'steal' };
+      }
+      break;
+    }
+    case 'expire': {
+      const star = bestPlayer(c);
+      if (star && c.squad.length > MIN_SQUAD) {
+        c.squad.splice(c.squad.indexOf(star), 1);
+        lines.push(`${star.name} lähtee, eikä seura saa hänestä mitään.`);
+      } else {
+        lines.push('Joukkueessa on kuitenkin niin vähän pelaajia, että hän suostuu jatkamaan.');
+      }
+      break;
+    }
+    case 'wealthTax': {
+      const richest = s.humans.map((id) => club(s, id)).sort((a, b) => b.cash - a.cash)[0];
+      const amount = Math.max(0, Math.round(richest.cash * card.share));
+      richest.cash -= amount;
+      lines.push(`${richest.name} on managereista rikkain ja maksaa ${fmt(amount)}.`);
+      break;
+    }
     case 'heal':
       for (const p of c.squad) {
         if (p.outReason === 'injury') { p.out = 0; delete p.outReason; }
@@ -652,8 +758,13 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
     }
     case 'auction': {
       const player = newPlayer(s, randomPos(s), card.min + randInt(s, card.max - card.min + 1));
-      if (card.subsidy) lines.push(`Sponsorin osuus on ${fmt(card.subsidy)}.`);
-      startAuction(s, player, c.id, card.subsidy ? { club: c.id, amount: card.subsidy } : null);
+      const order = standing(s);
+      // A player who turns up out of the blue is not for the side that is already winning.
+      const barred = order.length > 1 ? order[0] : null;
+      const last = order[order.length - 1];
+      if (barred !== null) lines.push(`${club(s, barred).name} on managereista parhaiten sijoittunut eikä saa osallistua.`);
+      if (card.subsidy) lines.push(`Sponsori maksaa ${fmt(card.subsidy)}, jos ${club(s, last).name} voittaa.`);
+      startAuction(s, player, c.id, card.subsidy ? { club: last, amount: card.subsidy } : null, barred);
       break;
     }
     case 'goto':
@@ -731,7 +842,11 @@ function roll(s: GameState) {
   const die = 1 + randInt(s, 6);
   const lines: string[] = [];
   s.die = die;
-  if (c.boardPos + die >= BOARD.length) payday(s, c, lines);
+  payWages(c, lines);
+  if (c.boardPos + die >= BOARD.length) {
+    c.cash += LAP_BONUS;
+    lines.push(`Kierros täynnä: saat kierrosbonuksen ${fmt(LAP_BONUS)}.`);
+  }
   c.boardPos = (c.boardPos + die) % BOARD.length;
   landOn(s, c, lines);
   finishLanding(s, c, lines);
@@ -751,14 +866,29 @@ function settleAuction(s: GameState) {
   const a = s.pending;
   if (a?.kind !== 'auction') return;
   if (a.active.length === 0) {
-    s.notice!.lines.push(`Kukaan ei huutanut. ${a.player.name} jää ilman seuraa.`);
+    s.notice!.lines.push(a.owner === null
+      ? `Kukaan ei huutanut. ${a.player.name} jää ilman seuraa.`
+      : `Kukaan ei huutanut. ${a.player.name} jatkaa vanhalla sopimuksella.`);
     s.pending = null;
   } else if (a.active.length === 1 && a.leader === a.active[0]) {
     const winner = club(s, a.leader);
     const sponsored = a.subsidy?.club === winner.id ? Math.min(a.subsidy.amount, a.bid) : 0;
     winner.cash -= a.bid - sponsored;
-    winner.squad.push(a.player);
-    const line = `${winner.name} voittaa huutokaupan: ${a.player.name} (${POS_NAME[a.player.pos]}, taso ${a.player.skill}) hintaan ${fmt(a.bid)}.${sponsored ? ` Sponsori maksaa siitä ${fmt(sponsored)}.` : ''}`;
+    if (a.owner === null) {
+      winner.squad.push(a.player);
+    } else if (a.owner !== winner.id) {
+      // A re-negotiation lost: the player moves, and his old club is paid the price.
+      const seller = club(s, a.owner);
+      const i = seller.squad.findIndex((x) => x.id === a.player.id);
+      winner.squad.push(...seller.squad.splice(i, 1));
+      seller.cash += a.bid;
+    }
+    const kept = a.owner === winner.id;
+    const line = kept
+      ? `${winner.name} pitää pelaajansa: ${a.player.name} saa uuden sopimuksen, joka maksaa ${fmt(a.bid)}.`
+      : a.owner !== null
+        ? `${winner.name} vie pelaajan ${a.player.name} hintaan ${fmt(a.bid)}. ${club(s, a.owner).name} saa kauppahinnan.`
+        : `${winner.name} voittaa huutokaupan: ${a.player.name} (${POS_NAME[a.player.pos]}, taso ${a.player.skill}) hintaan ${fmt(a.bid)}.${sponsored ? ` Sponsori maksaa siitä ${fmt(sponsored)}.` : ''}`;
     s.notice!.lines.push(line);
     log(s, line);
     s.pending = null;
@@ -820,7 +950,7 @@ function playLeagueRound(s: GameState) {
 function playCupRound(s: GameState, cupRound: number) {
   const ties = s.cup[cupRound];
   const winners = ties.map((t) => {
-    const won = playTie(s, t);
+    const won = playTie(s, t, cupGate(cupRound));
     if (t.a.clubId !== null || t.b.clubId !== null) log(s, `Cup, ${CUP_ROUND_NAMES[cupRound].toLowerCase()}: ${tieLine(s, t)}`);
     return won;
   });
@@ -846,7 +976,9 @@ export const entrantName = (s: GameState, e: Entrant) => (e.clubId === null ? e.
 const tieLine = (s: GameState, t: Tie) => `${entrantName(s, t.a)} – ${entrantName(s, t.b)} ${t.ag}–${t.bg}${t.pens ? ' (rp.)' : ''}`;
 
 /** Plays one knockout match on neutral ground and returns the side that goes through. */
-function playTie(s: GameState, t: Tie): Entrant {
+function playTie(s: GameState, t: Tie, gate: number): Entrant {
+  t.gate = gate;
+  for (const e of [t.a, t.b]) if (e.clubId !== null) club(s, e.clubId).cash += gate;
   // A club from outside the league plays like a 4-4-2 whose players are all of its level.
   const strength = (e: Entrant): Strength =>
     e.clubId === null
@@ -887,7 +1019,7 @@ function playEuroRound(s: GameState, comp: EuroComp, round: number) {
   const info = EURO_COMPS[comp.tier];
   const ties = comp.rounds[round];
   const winners = ties.map((t) => {
-    const won = playTie(s, t);
+    const won = playTie(s, t, euroGate(comp.tier, round));
     if (won.clubId !== null) club(s, won.clubId).cash += info.win;
     if (t.a.clubId !== null || t.b.clubId !== null) log(s, `${info.name}, ${EURO_ROUND_NAMES[round].toLowerCase()}: ${tieLine(s, t)}`);
     return won;
@@ -984,7 +1116,8 @@ export function reduce(state: GameState, action: Action): GameState {
       if (p?.kind !== 'auction') return state;
       const bidder = club(s, p.active[p.idx]);
       const min = p.leader === null ? p.minBid : p.bid + 5;
-      if (action.amount < min || action.amount > bidder.cash || bidder.squad.length >= MAX_SQUAD) return state;
+      const full = bidder.squad.length >= MAX_SQUAD && bidder.id !== p.owner;
+      if (action.amount < min || action.amount > bidder.cash || full) return state;
       p.bid = action.amount;
       p.leader = bidder.id;
       p.idx = (p.idx + 1) % p.active.length;
@@ -1029,9 +1162,23 @@ export function reduce(state: GameState, action: Action): GameState {
     }
 
     case 'SKIP':
-      if (p?.kind !== 'scout' && p?.kind !== 'training') return state;
+      if (p?.kind !== 'scout' && p?.kind !== 'training' && p?.kind !== 'steal') return state;
       s.pending = null;
       return s;
+
+    case 'STEAL': {
+      if (p?.kind !== 'steal' || action.clubId === me.id || me.squad.length >= MAX_SQUAD) return state;
+      const victim = s.clubs.find((c) => c.id === action.clubId);
+      const i = victim ? victim.squad.findIndex((x) => x.id === action.playerId) : -1;
+      if (!victim || i < 0 || victim.squad.length <= MIN_SQUAD) return state;
+      const [taken] = victim.squad.splice(i, 1);
+      me.squad.push(taken);
+      const line = `${me.name} houkuttelee pelaajan ${taken.name} (${POS_NAME[taken.pos]}, taito ${taken.skill}) seurasta ${victim.name}.`;
+      s.notice!.lines.push(line);
+      log(s, line);
+      s.pending = null;
+      return s;
+    }
 
     case 'SET_FORMATION':
       if (!inTurn || p) return state;
@@ -1043,7 +1190,8 @@ export function reduce(state: GameState, action: Action): GameState {
       const seller = club(s, actingClubId(s));
       if (!inTurn || seller.squad.length <= MIN_SQUAD) return state;
       const i = seller.squad.findIndex((x) => x.id === action.playerId);
-      if (i < 0) return state;
+      // A player who is under the hammer himself cannot be sold from under the bidders.
+      if (i < 0 || (p?.kind === 'auction' && p.player.id === action.playerId)) return state;
       const [sold] = seller.squad.splice(i, 1);
       seller.cash += sellPrice(sold);
       log(s, `${seller.name} myy pelaajan ${sold.name} hintaan ${fmt(sellPrice(sold))}.`);
