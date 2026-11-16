@@ -1,0 +1,209 @@
+import type { ReactNode } from 'react';
+import { BOARD, POS_NAME, SQUARE_INFO, fmt } from './game/data';
+import {
+  MAX_SQUAD, currentClubId, playerValue, trainingCost,
+  type Action, type GameState, type Player,
+} from './game/engine';
+
+type Dispatch = (action: Action) => void;
+
+/** Squares run clockwise around a 7 × 7 grid, starting from the top-left corner. */
+function cell(i: number): { gridRow: number; gridColumn: number } {
+  if (i <= 6) return { gridRow: 1, gridColumn: i + 1 };
+  if (i <= 12) return { gridRow: i - 5, gridColumn: 7 };
+  if (i <= 18) return { gridRow: 7, gridColumn: 19 - i };
+  return { gridRow: 25 - i, gridColumn: 1 };
+}
+
+export function PlayerCard({ player, children }: { player: Player; children?: ReactNode }) {
+  return (
+    <div className="player-card">
+      <span className={`pos pos-${player.pos}`} title={POS_NAME[player.pos]}>{player.pos}</span>
+      <div className="player-card-main">
+        <strong>{player.name}</strong>
+        <span className="muted small">Taso {player.skill} · arvo {fmt(playerValue(player.skill))}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
+  const me = game.clubs[currentClubId(game)];
+  const p = game.pending;
+  const full = me.squad.length >= MAX_SQUAD;
+  const square = game.notice ? SQUARE_INFO[BOARD[game.notice.square]] : null;
+
+  const heading = (
+    <div className="turn-heading">
+      <span className="dot big" style={{ background: me.color }} />
+      <div>
+        <div className="muted small">Vuorossa</div>
+        <strong>{me.name}</strong>
+      </div>
+      <div className="spacer" />
+      <div className="cash">{fmt(me.cash)}</div>
+    </div>
+  );
+
+  if (game.phase === 'roll') {
+    return (
+      <>
+        {heading}
+        <div className="center-body centered">
+          <p className="muted">Voit vaihtaa muodostelmaa tai myydä pelaajia oikealta ennen heittoa.</p>
+          <button className="primary big" onClick={() => dispatch({ type: 'ROLL' })}>🎲 Heitä noppaa</button>
+        </div>
+      </>
+    );
+  }
+  if (game.phase !== 'manage') return <>{heading}</>;
+
+  const notice = (
+    <div className="notice">
+      <div className="notice-head">
+        <span className="die">{String.fromCodePoint(0x2680 + (game.die ?? 1) - 1)}</span>
+        <div>
+          <strong>{square?.icon} {square?.name}</strong>
+          <div className="muted small">{square?.help}</div>
+        </div>
+      </div>
+      {game.notice?.lines.map((line, i) => <p key={i}>{line}</p>)}
+    </div>
+  );
+
+  let body: ReactNode;
+  if (p?.kind === 'auctionPick') {
+    body = (
+      <>
+        <p>Valitse pelaaja, josta huudetaan.</p>
+        {p.options.map((o, i) => (
+          <PlayerCard key={o.id} player={o}>
+            <button className="primary" onClick={() => dispatch({ type: 'AUCTION_PICK', index: i })}>Huutokauppaan</button>
+          </PlayerCard>
+        ))}
+      </>
+    );
+  } else if (p?.kind === 'auction') {
+    const bidder = game.clubs[p.active[p.idx]];
+    const min = p.leader === null ? p.minBid : p.bid + 5;
+    const bidderFull = bidder.squad.length >= MAX_SQUAD;
+    body = (
+      <>
+        <PlayerCard player={p.player} />
+        <div className="auction-status">
+          {p.leader === null ? (
+            <span>Lähtöhinta <strong>{fmt(p.minBid)}</strong></span>
+          ) : (
+            <span>Korkein tarjous <strong>{fmt(p.bid)}</strong> · {game.clubs[p.leader].name}</span>
+          )}
+        </div>
+        <div className="bidder">
+          <span className="dot" style={{ background: bidder.color }} />
+          <span>Tarjousvuorossa <strong>{bidder.name}</strong> (kassa {fmt(bidder.cash)})</span>
+        </div>
+        {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa), joten et voi tarjota.</p>}
+        <div className="row">
+          {[0, 5, 20, 45].map((extra) => (
+            <button
+              key={extra}
+              className="primary"
+              disabled={bidderFull || min + extra > bidder.cash}
+              onClick={() => dispatch({ type: 'BID', amount: min + extra })}
+            >
+              {fmt(min + extra)}
+            </button>
+          ))}
+          <button onClick={() => dispatch({ type: 'PASS' })}>Luovun</button>
+        </div>
+      </>
+    );
+  } else if (p?.kind === 'scout') {
+    body = (
+      <>
+        <p>Kykyjenetsijä ehdottaa kolmea pelaajaa. Voit ostaa yhden.</p>
+        {full && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin joku toisella vuorolla.</p>}
+        {p.options.map((o, i) => (
+          <PlayerCard key={o.id} player={o}>
+            <button
+              className="primary"
+              disabled={full || me.cash < playerValue(o.skill)}
+              onClick={() => dispatch({ type: 'SCOUT_BUY', index: i })}
+            >
+              Osta
+            </button>
+          </PlayerCard>
+        ))}
+        <button onClick={() => dispatch({ type: 'SKIP' })}>Ei kiitos</button>
+      </>
+    );
+  } else if (p?.kind === 'training') {
+    body = (
+      <>
+        <p>Valitse pelaaja leirille. Taso nousee yhdellä.</p>
+        <div className="scroll-list">
+          {[...me.squad].sort((a, b) => b.skill - a.skill).map((o) => (
+            <PlayerCard key={o.id} player={o}>
+              <button
+                className="primary"
+                disabled={o.skill >= 10 || me.cash < trainingCost(o)}
+                onClick={() => dispatch({ type: 'TRAIN', playerId: o.id })}
+              >
+                {fmt(trainingCost(o))}
+              </button>
+            </PlayerCard>
+          ))}
+        </div>
+        <button onClick={() => dispatch({ type: 'SKIP' })}>Ei kiitos</button>
+      </>
+    );
+  } else {
+    const last = game.turn === game.humans.length - 1;
+    body = (
+      <button className="primary big" onClick={() => dispatch({ type: 'END_TURN' })}>
+        {last ? 'Lopeta vuoro ja pelaa kierros' : 'Lopeta vuoro'}
+      </button>
+    );
+  }
+
+  return (
+    <>
+      {heading}
+      <div className="center-body">
+        {notice}
+        {body}
+      </div>
+    </>
+  );
+}
+
+export default function Board({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
+  const humans = game.humans.map((id) => game.clubs[id]);
+  const currentId = currentClubId(game);
+  return (
+    <section className="board">
+      {BOARD.map((type, i) => {
+        const info = SQUARE_INFO[type];
+        return (
+          <div key={i} className={`square square-${type}`} style={cell(i)} title={info.help}>
+            <span className="square-icon">{info.icon}</span>
+            <span className="square-name">{info.name}</span>
+            <div className="tokens">
+              {humans.filter((c) => c.boardPos === i).map((c) => (
+                <span
+                  key={c.id}
+                  className={`token ${c.id === currentId ? 'token-current' : ''}`}
+                  style={{ background: c.color }}
+                  title={c.name}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      <div className="center card">
+        <Center game={game} dispatch={dispatch} />
+      </div>
+    </section>
+  );
+}
