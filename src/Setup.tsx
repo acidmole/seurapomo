@@ -8,10 +8,12 @@ const DEFAULT_NAMES = ['Punaiset', 'Siniset', 'Keltaiset', 'Vihreät', 'Violetit
 export default function Setup({ onStart }: { onStart: (config: GameConfig) => void }) {
   const [count, setCount] = useState(2);
   const [names, setNames] = useState(DEFAULT_NAMES);
+  // Which seats the computer plays. The first seat is always a person.
+  const [computer, setComputer] = useState<boolean[]>(DEFAULT_NAMES.map(() => false));
 
   const start = () =>
     onStart({
-      clubs: names.slice(0, count).map((name, i) => ({ name: name.trim() || DEFAULT_NAMES[i], color: HUMAN_COLORS[i] })),
+      clubs: names.slice(0, count).map((name, i) => ({ name: name.trim() || DEFAULT_NAMES[i], color: HUMAN_COLORS[i], computer: i > 0 && computer[i] })),
       seed: Date.now() % 2147483647,
     });
 
@@ -40,6 +42,16 @@ export default function Setup({ onStart }: { onStart: (config: GameConfig) => vo
                 aria-label={`Seuran ${i + 1} nimi`}
                 onChange={(e) => setNames(names.map((n, j) => (j === i ? e.target.value : n)))}
               />
+              {i > 0 && (
+                <button
+                  type="button"
+                  className={computer[i] ? 'tiny seat active' : 'tiny seat'}
+                  aria-pressed={computer[i]}
+                  onClick={() => setComputer(computer.map((c, j) => (j === i ? !c : c)))}
+                >
+                  {computer[i] ? 'Tietokone' : 'Ihminen'}
+                </button>
+              )}
             </label>
           ))}
         </div>

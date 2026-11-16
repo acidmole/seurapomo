@@ -189,6 +189,24 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .notice-head .display { font-size: 22px; }
 .die { flex: none; width: 48px; height: 48px; padding: 8px; border-radius: 8px; background: var(--cream); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); place-items: center; }
 .die .pip { width: 8px; height: 8px; border-radius: 50%; background: #17231b; }
+.die-tumbling { width: 72px; height: 72px; padding: 12px; border-radius: 12px; box-shadow: 4px 4px 0 var(--shadow); animation: die-tumble 0.3s linear infinite; }
+.die-tumbling .pip { width: 12px; height: 12px; }
+.die-landed { animation: die-land 0.35s ease-out; }
+@keyframes die-tumble {
+  0% { transform: translate(-14px, 4px) rotate(-18deg); }
+  25% { transform: translate(10px, -10px) rotate(40deg); }
+  50% { transform: translate(16px, 6px) rotate(110deg); }
+  75% { transform: translate(-8px, -8px) rotate(200deg); }
+  100% { transform: translate(-14px, 4px) rotate(342deg); }
+}
+@keyframes die-land {
+  0% { transform: translateY(-14px) rotate(-25deg) scale(1.25); }
+  60% { transform: translateY(2px) rotate(6deg) scale(0.96); }
+  100% { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .die-tumbling, .die-landed { animation: none; }
+}
 
 .player-card { display: flex; align-items: stretch; gap: 12px; padding: 4px; background: var(--cream); color: #17231b; }
 .player-card .muted { color: #56645a; }
@@ -303,7 +321,11 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .segmented button.active { background: #17231b; border-color: #17231b; color: var(--cream); }
 .setup-names { display: grid; gap: 8px; }
 .setup-names label { display: flex; align-items: center; gap: 10px; }
-.setup-names input { flex: 1; }
+.setup-names input { flex: 1; min-width: 0; }
+.seat { min-width: 6.5em; }
+.seat.active { background: #17231b; border-color: #17231b; color: var(--cream); }
+.robot { padding: 2px 6px; background: var(--accent); color: #17231b; font: 700 12px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; }
+.thinking { font-style: italic; }
 
 /* Side by side, the team sheet is as tall as the window and scrolls inside, so the board stays put. */
 @media (min-width: 1100px) {

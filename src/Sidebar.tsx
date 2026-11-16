@@ -165,8 +165,8 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const actingId = actingClubId(game);
   const [viewId, setViewId] = useState(actingId);
   const club = game.clubs[viewId];
-  const canEdit = viewId === currentId && (game.phase === 'roll' || game.phase === 'manage') && !game.pending;
-  const canSell = viewId === actingId && (game.phase === 'roll' || game.phase === 'manage');
+  const canEdit = viewId === currentId && !club.auto && (game.phase === 'roll' || game.phase === 'manage') && !game.pending;
+  const canSell = viewId === actingId && !club.auto && (game.phase === 'roll' || game.phase === 'manage');
   const xi = lineup(club);
   const starters = new Map(xi.slots.flatMap((s) => (s.player ? [[s.player.id, s] as const] : [])));
   const week = thisWeek(game);
@@ -189,6 +189,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     <>
       <div className="sheet-head">
         <h2 className="display">{club.name}</h2>
+        {club.auto && <span className="robot">Tietokone</span>}
         <span className="muted">Sarjassa {position(game, viewId)}. · varallisuus {fmt(wealth(club))}</span>
       </div>
       {game.humans.length > 1 && (

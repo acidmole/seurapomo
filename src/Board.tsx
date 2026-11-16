@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { BOARD, SQUARE_INFO, fmt } from './game/data';
 import {
-  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, currentClubId, isBroke, mustSell, playerValue, trainingCost,
+  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, isBroke, mustSell, playerValue, trainingCost,
   type Action, type GameState,
 } from './game/engine';
-import { Die, Icon, PlayerCard } from './ui';
+import { Die, Icon, PlayerCard, ROLL_MS, TumblingDie, rattle } from './ui';
 
 type Dispatch = (action: Action) => void;
 
@@ -14,6 +14,26 @@ function cell(i: number): { gridRow: number; gridColumn: number } {
   if (i <= 12) return { gridRow: i - 5, gridColumn: 7 };
   if (i <= 18) return { gridRow: 7, gridColumn: 19 - i };
   return { gridRow: 25 - i, gridColumn: 1 };
+}
+
+/** The die rattles and tumbles for a moment before the roll is made. */
+function RollButton({ onRoll }: { onRoll: () => void }) {
+  const [rolling, setRolling] = useState(false);
+  useEffect(() => {
+    if (!rolling) return;
+    const timer = setTimeout(onRoll, ROLL_MS);
+    return () => clearTimeout(timer);
+    // Only the start of the roll matters; `onRoll` is a fresh function on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rolling]);
+
+  if (rolling) return <TumblingDie />;
+  const start = () => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return onRoll();
+    rattle();
+    setRolling(true);
+  };
+  return <button className="primary big" onClick={start}>Heitä noppaa</button>;
 }
 
 /** Choosing a player to take from another club: pick the club, then the player. */
@@ -63,13 +83,16 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     </div>
   );
 
+  const thinking = <p className="muted thinking">{game.clubs[actingClubId(game)].name} on tietokoneen ohjaama. Se miettii siirtoaan…</p>;
+
   if (game.phase === 'roll') {
+    if (me.auto) return <>{heading}<div className="center-body centered">{thinking}</div></>;
     return (
       <>
         {heading}
         <div className="center-body centered">
           <p className="muted">Voit vaihtaa muodostelmaa tai myydä pelaajia oikealta ennen heittoa.</p>
-          <button className="primary big" onClick={() => dispatch({ type: 'ROLL' })}>Heitä noppaa</button>
+          <RollButton onRoll={() => dispatch({ type: 'ROLL' })} />
         </div>
       </>
     );
@@ -90,7 +113,14 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   );
 
   let body: ReactNode;
-  if (p?.kind === 'auctionPick') {
+  if (me.auto && p?.kind !== 'auction') {
+    body = (
+      <>
+        {p?.kind === 'auctionPick' || p?.kind === 'scout' ? p.options.map((o) => <PlayerCard key={o.id} player={o} />) : null}
+        {thinking}
+      </>
+    );
+  } else if (p?.kind === 'auctionPick') {
     body = (
       <>
         <p>Valitse pelaaja, josta huudetaan.</p>
@@ -142,6 +172,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         </ul>
         {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat tarjota.</p>}
         {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia oikealta ja tarjota sitten.</p>}
+        {bidder.auto ? thinking : (
         <div className="row">
           {[0, 5, 20, 45].map((extra) => (
             <button
@@ -155,6 +186,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           ))}
           <button onClick={() => dispatch({ type: 'PASS' })}>Luovun</button>
         </div>
+        )}
       </>
     );
   } else if (p?.kind === 'steal') {

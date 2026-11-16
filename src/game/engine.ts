@@ -66,6 +66,8 @@ export interface Club {
   boardPos: number;
   /** -1, 0 or 1: applies to the club's next match only. */
   morale: number;
+  /** A manager's seat played by the computer rather than a person. */
+  auto?: boolean;
   /** A card has promised a stoppage-time chance in the next league match. */
   surge?: boolean;
   /** A manager who could not pay his debts. The computer runs the club from then on. */
@@ -119,7 +121,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 22;
+export const STATE_VERSION = 23;
 
 export interface GameState {
   version: number;
@@ -180,7 +182,7 @@ export type Action =
   /** At the end of a season: stop here and count up instead of playing another year. */
   | { type: 'FINISH' };
 
-export interface GameConfig { clubs: { name: string; color: string }[]; seed: number }
+export interface GameConfig { clubs: { name: string; color: string; computer?: boolean }[]; seed: number }
 
 // ---------- random ----------
 
@@ -571,6 +573,7 @@ export function createGame(config: GameConfig): GameState {
       id: i,
       name: human ? human.name : AI_CLUB_NAMES[ai],
       human: !!human,
+      ...(human?.computer ? { auto: true } : {}),
       color: human ? human.color : '#7b8794',
       cash: START_CASH,
       squad: newSquad(s, human ? 0 : aiOffsets[ai]),
@@ -1082,6 +1085,7 @@ function endTurn(s: GameState) {
 function goBankrupt(s: GameState, c: Club) {
   log(s, `${c.name} ei pysty maksamaan velkojaan. Manageri putoaa pelistä, ja tietokone ottaa seuran hoitoonsa.`);
   c.human = false;
+  delete c.auto;
   c.bankrupt = true;
   c.cash = 0;
   if (!c.squad.some((p) => p.pos === 'MV')) c.squad.push(newPlayer(s, 'MV', 3));

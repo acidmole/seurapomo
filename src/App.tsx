@@ -5,9 +5,12 @@ import Setup from './Setup';
 import Sidebar from './Sidebar';
 import { Wordmark } from './ui';
 import { CUP_ROUND_NAMES, EURO_ROUND_NAMES, fmt } from './game/data';
+import { botStep, botToMove } from './game/bot';
 import { ROUNDS, STATE_VERSION, actingClubId, thisWeek, createGame, currentClubId, reduce, type Action, type GameState } from './game/engine';
 
 const SAVE_KEY = 'seurapomo-save';
+/** Pause before each move a computer-run manager makes. */
+const BOT_MOVE_MS = 1100;
 
 function loadGame(): GameState | null {
   try {
@@ -33,6 +36,14 @@ export default function App() {
       // Saving is a convenience; the game works without it.
     }
   }, [game]);
+
+  // A computer-run manager moves by itself, with a pause between moves so the others can follow.
+  const waitingForBot = !!game && botToMove(game);
+  useEffect(() => {
+    if (!waitingForBot) return;
+    const timer = setTimeout(() => setGame((g) => (g && botToMove(g) ? botStep(g) : g)), BOT_MOVE_MS);
+    return () => clearTimeout(timer);
+  }, [game, waitingForBot]);
 
   if (!game) return <Setup onStart={(config) => setGame(createGame(config))} />;
 
@@ -62,6 +73,7 @@ export default function App() {
             <div key={id} className={id === current.id && current.human ? 'manager manager-current' : 'manager'}>
               <span className="dot" style={{ background: game.clubs[id].color }} />
               <strong>{game.clubs[id].name}</strong>
+              {game.clubs[id].auto && <span className="robot" title="Tietokoneen ohjaama">TK</span>}
               <span className={game.clubs[id].cash < 0 ? 'neg' : ''}>{fmt(game.clubs[id].cash)}</span>
             </div>
           ))}

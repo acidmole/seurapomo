@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
+import { botAction, botStep, botToMove } from './bot';
 import {
   EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
@@ -583,6 +584,46 @@ describe('cup', () => {
     while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
     expect(s.round).toBe(EURO_AFTER[0] + 1);
     for (const id of s.humans) expect(s.clubs[id].squad.every((p) => p.fitness === 9)).toBe(true);
+  });
+});
+
+describe('computer managers', () => {
+  const withBots = (seed: number, seats = 4) =>
+    createGame({ clubs: Array.from({ length: seats }, (_, i) => ({ name: `Seura ${i + 1}`, color: HUMAN_COLORS[i], computer: i > 0 })), seed });
+
+  it('marks the seats and waits for the computer only on its own moves', () => {
+    const s = withBots(1);
+    expect(s.humans.map((id) => !!s.clubs[id].auto)).toEqual([false, true, true, true]);
+    expect(botToMove(s)).toBe(false);
+    let next = s;
+    while (currentClubId(next) === s.humans[0]) next = reduce(next, bot(next));
+    expect(botToMove(next)).toBe(true);
+  });
+
+  it('play whole seasons by themselves without getting stuck or all going bankrupt', () => {
+    let bankrupt = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      let s = withBots(seed);
+      for (let i = 0; i < 20000 && s.phase !== 'seasonEnd' && s.phase !== 'gameOver'; i++) {
+        const next = botToMove(s) ? botStep(s) : reduce(s, bot(s));
+        expect(next).not.toBe(s);
+        s = next;
+      }
+      expect(s.phase).toBe('seasonEnd');
+      bankrupt += s.bankrupt.filter((id) => id !== 0).length;
+    }
+    expect(bankrupt).toBeLessThanOrEqual(3);
+  });
+
+  it('answers an offer sensibly', () => {
+    const s = withBots(2);
+    s.order = [s.humans[1], s.humans[0], s.humans[2], s.humans[3]];
+    const scouting = playCardNow(s, CARDS.findIndex((c) => c.kind === 'goto' && c.square === 'scout'));
+    expect(['SCOUT_BUY', 'SKIP']).toContain(botAction(scouting).type);
+    const broke = structuredClone(s);
+    broke.phase = 'manage';
+    broke.clubs[s.humans[1]].cash = -10;
+    expect(botAction(broke).type).toBe('SELL');
   });
 });
 
