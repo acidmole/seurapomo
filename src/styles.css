@@ -187,6 +187,9 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .notice { display: grid; gap: 8px; }
 .notice-head { display: flex; align-items: center; gap: 14px; }
 .notice-head .display { font-size: 22px; }
+.mark { display: inline-block; margin-left: 10px; padding: 3px 8px; color: #fff; font: 700 13px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; vertical-align: middle; }
+.mark.crisis { background: #a3261d; }
+.mark.lucky { background: #1f7a3a; }
 .die { flex: none; width: 48px; height: 48px; padding: 8px; border-radius: 8px; background: var(--cream); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); place-items: center; }
 .die .pip { width: 8px; height: 8px; border-radius: 50%; background: #17231b; }
 .die-tumbling { width: 72px; height: 72px; padding: 12px; border-radius: 12px; box-shadow: 4px 4px 0 var(--shadow); animation: die-tumble 0.3s linear infinite; }
@@ -246,7 +249,8 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 10px 8px; }
 .stats div { display: flex; flex-direction: column; gap: 2px; }
 .stats strong { font: 700 22px/1 var(--display); font-variant-numeric: tabular-nums; }
-.formation { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.formation, .bank { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bank { margin-bottom: 10px; }
 
 .mini-pitch { position: relative; height: 200px; overflow: hidden; background: repeating-linear-gradient(90deg, #2a7d45 0 12.5%, #27753f 12.5% 25%); }
 .mini-pitch .pitch-edge { inset: 8px; }

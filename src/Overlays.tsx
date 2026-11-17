@@ -94,7 +94,7 @@ function WealthTable({ game }: { game: GameState }) {
   return (
     <table className="table">
       <thead>
-        <tr><th>#</th><th className="left">Manageri</th><th>Kassa</th><th>Pelaajien arvo</th><th>Yhteensä</th></tr>
+        <tr><th>#</th><th className="left">Manageri</th><th>Kassa</th><th>Pelaajien arvo</th><th>Laina</th><th>Yhteensä</th></tr>
       </thead>
       <tbody>
         {ranking.map((c, i) => (
@@ -103,6 +103,7 @@ function WealthTable({ game }: { game: GameState }) {
             <td className="left"><ClubName game={game} id={c.id} /></td>
             <td>{fmt(c.cash)}</td>
             <td>{fmt(squadValue(c))}</td>
+            <td className={c.loan > 0 ? 'neg' : ''}>{c.loan > 0 ? `−${fmt(c.loan)}` : '–'}</td>
             <td><strong>{fmt(wealth(c))}</strong></td>
           </tr>
         ))}
@@ -110,7 +111,7 @@ function WealthTable({ game }: { game: GameState }) {
           <tr key={id} className="bench">
             <td>{ranking.length + i + 1}</td>
             <td className="left">{game.clubs[id].name}</td>
-            <td colSpan={3}>Konkurssi</td>
+            <td colSpan={4}>Konkurssi</td>
           </tr>
         ))}
       </tbody>

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, POS_NAME, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
+import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, FULL_TIME, cupGate, euroGate, MATCH_BONUS_COST, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Tie,
+  EURO_AFTER, FULL_TIME, REST_RECOVERY, cupGate, euroGate, LOAN_INTEREST, LOAN_STEP, MATCH_BONUS_COST, loanInterest, loanRoom, EXHAUSTED_AT, plays, posBadge, posName, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Player, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -148,7 +148,7 @@ function MiniPitch({ club }: { club: Club }) {
         return line.map((s, i) => (
           <span
             key={`${pos}${i}`}
-            className={`spot ${pos === 'MV' ? 'spot-keeper' : ''} ${!s.player ? 'spot-empty' : s.player.pos !== pos ? 'spot-makeshift' : ''}`}
+            className={`spot ${pos === 'MV' ? 'spot-keeper' : ''} ${!s.player ? 'spot-empty' : !plays(s.player, pos) ? 'spot-makeshift' : ''}`}
             style={{ left: `${x}%`, top: `${((i + 1) / (line.length + 1)) * 100}%` }}
             title={s.player ? s.player.name : 'Tyhjä paikka'}
           >
@@ -167,6 +167,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const club = game.clubs[viewId];
   const canEdit = viewId === currentId && !club.auto && (game.phase === 'roll' || game.phase === 'manage') && !game.pending;
   const canSell = viewId === actingId && !club.auto && (game.phase === 'roll' || game.phase === 'manage');
+  const canBank = canSell;
   const xi = lineup(club);
   const starters = new Map(xi.slots.flatMap((s) => (s.player ? [[s.player.id, s] as const] : [])));
   const week = thisWeek(game);
@@ -183,7 +184,9 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     : tie ? (tie.a.clubId === viewId ? tie.b.clubId : tie.a.clubId) : null;
   const rival = rivalId != null ? game.clubs[rivalId] : null;
   const streak = winStreak(game, viewId);
-  const squad = [...club.squad].sort((a, b) => POS_ORDER.indexOf(a.pos) - POS_ORDER.indexOf(b.pos) || b.skill - a.skill);
+  // Utility players sit between the lines they cover: defensive midfielders before the midfield, attacking ones after.
+  const sortKey = (p: Player) => POS_ORDER.indexOf(p.pos) * 2 + (p.also === 'PU' ? -1 : p.also === 'HY' ? 1 : 0);
+  const squad = [...club.squad].sort((a, b) => sortKey(a) - sortKey(b) || b.skill - a.skill);
 
   return (
     <>
@@ -212,6 +215,35 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         <div><span className="label">Sisu</span><strong>{xi.spirit.toLocaleString('fi-FI', { maximumFractionDigits: 1 })}</strong></div>
       </div>
 
+      {(canBank || club.loan > 0) && (
+        <div className="bank">
+          <span className="label">Pankkilaina</span>
+          <strong>{fmt(club.loan)}</strong>
+          {club.loan > 0 && <span className="muted small">korko {fmt(loanInterest(club))} / vko</span>}
+          {canBank && (
+            <>
+              <button
+                className="tiny"
+                disabled={loanRoom(club) < LOAN_STEP}
+                title={`Pankki perii lainasta korkoa ${Math.round(LOAN_INTEREST * 100)} % viikossa`}
+                onClick={() => dispatch({ type: 'BORROW' })}
+              >
+                Ota lainaa {fmt(LOAN_STEP)}
+              </button>
+              {club.loan > 0 && (
+                <button
+                  className="tiny"
+                  disabled={club.cash < Math.min(LOAN_STEP, club.loan)}
+                  onClick={() => dispatch({ type: 'REPAY' })}
+                >
+                  Lyhennä {fmt(Math.min(LOAN_STEP, club.loan))}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       <label className="formation">
         <span className="label">Muodostelma</span>
         <select
@@ -239,9 +271,11 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         {week?.kind === 'cup' || week?.kind === 'euro' ? (
           opponent
             ? <>Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupia'}: vastassa on {opponent}. Lipputuloja kertyy {fmt(tieGate)}.</>
-            : <span className="muted">Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupeja'}. Joukkueesi ei ole mukana, joten pelaajat lepäävät.</span>
-        ) : nextHome
-          ? <>Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}.</>
+            : <span className="muted">Tällä viikolla pelataan {week.kind === 'cup' ? 'cupia' : 'eurocupeja'}. Joukkueesi ei ole mukana.</span>
+        ) : nextHome && club.boycott
+          ? <span className="neg">Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}), mutta kannattajat boikotoivat sitä: lipputuloja ei kerry.</span>
+        : nextHome
+          ? <>{club.sellout && <span className="pos">Loppuunmyyty: lipputulot kaksinkertaiset. </span>}Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak) * (club.sellout ? 2 : 1))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}.</>
           : <span className="muted">Seuraava ottelu pelataan vieraissa, joten lipputuloja ei kerry.</span>}
       </p>
 
@@ -269,7 +303,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             const slot = starters.get(p.id);
             return (
               <tr key={p.id} className={slot ? '' : 'bench'}>
-                <td><span className="badge" title={POS_NAME[p.pos]}>{p.pos}</span></td>
+                <td><span className="badge" title={posName(p)}>{posBadge(p)}</span></td>
                 <td className="left">{p.name}{p.legend && <span className="robot legend" title="Legenda: puoleen hintaan ja puolella palkalla">Legenda</span>}</td>
                 <td>
                   <strong
@@ -287,7 +321,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                     : p.out > 0
                     ? <span className="neg">{p.outReason === 'ban' ? 'Pelikielto' : 'Loukkaantunut'}, {p.out} ott.</span>
                     : slot
-                      ? slot.pos === p.pos ? 'Avaus' : `Avaus: ${slot.pos}, teho ${slot.eff}`
+                      ? slot.pos === p.pos ? 'Avaus' : plays(p, slot.pos) ? `Avaus: ${slot.pos}` : `Avaus: ${slot.pos}, teho ${slot.eff}`
                       : 'Vaihdossa'}
                   {p.form && (
                     <span className={p.form.amount > 0 ? 'pos' : 'neg'}>
@@ -301,7 +335,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                     <button
                       className="tiny"
                       aria-pressed={!!p.resting}
-                      title="Lepuuta: pelaaja jää pois tämän viikon ottelusta ja saa kolme kuntopistettä"
+                      title={`Lepuuta: pelaaja jää pois tämän viikon otteluista. Jos hän ei pelaa viikolla lainkaan, hän saa ${REST_RECOVERY} kuntopistettä`}
                       onClick={() => dispatch({ type: 'REST', playerId: p.id })}
                     >
                       {p.resting ? 'Peru' : 'Lepo'}
@@ -326,10 +360,10 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         lisää maalipaikkoja molemmille, suljettu vähentää: vahvemman kannattaa avata peli, heikomman sulkea se.
       </p>
       <p className="muted small">
-        Avauskokoonpano valitaan automaattisesti taidon mukaan; omalla vuorollasi voit lepuuttaa pelaajan tämän viikon ottelusta. Väärällä paikalla pelaava pelaa puolella teholla.
-        Ottelu vie avaajalta kolme kuntopistettä, ja jokainen sarjakierros palauttaa kaikille kolme. Cup- ja
-        eurocupviikot siis kuluttavat: pelaaja palautuu vasta, kun hän lepää yhden ottelun. Kun
-        kunto on enintään {TIRED_AT}, taito laskee yhdellä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,
+        Avauskokoonpano valitaan automaattisesti taidon mukaan; omalla vuorollasi voit lepuuttaa pelaajan tämän viikon otteluista. Väärällä paikalla pelaava pelaa puolella teholla.
+        Jokainen ottelu vie avaajalta yhden kuntopisteen. Pelaaja palautuu vain, jos hän ei pelaa viikolla
+        lainkaan: silloin hän saa {REST_RECOVERY} kuntopistettä. Viikolla voi olla sarjaottelun lisäksi cup- tai
+        eurocupottelu. Kun kunto on enintään {TIRED_AT}, taito laskee yhdellä, ja kun se on {EXHAUSTED_AT}, kahdella. PK on puolustava keskikenttäpelaaja, joka pelaa yhtä hyvin puolustuksessa, ja HK hyökkäävä keskikenttäpelaaja, joka pelaa yhtä hyvin hyökkäyksessä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,
         altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa. Sisukas joukkue saa myös useammin vielä yhden
         maalipaikan lisäajalla.
       </p>

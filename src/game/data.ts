@@ -67,7 +67,12 @@ export const SQUARE_INFO: Record<SquareType, { name: string; icon: string; patte
 /** Shirt pattern shown behind a player of each position. */
 export const POS_PATTERN: Record<Pos, string> = { MV: HALVES, PU: STRIPES, KK: HOOPS, HY: SASH };
 
-export type Card =
+export type Card = {
+  /** A club crisis: shown under a banner of its own. */
+  crisis?: boolean;
+  /** A stroke of luck, the crisis's opposite number: also shown under its own banner. */
+  lucky?: boolean;
+} & (
   | { kind: 'cash'; amount: number; text: string }
   /** Temporary form: `amount` on the player's skill for `matches` league rounds, or to the end of the season when null. */
   | { kind: 'form'; amount: number; matches: number | null; text: string }
@@ -109,7 +114,18 @@ export type Card =
   | { kind: 'auction'; min: number; max: number; subsidy: number; text: string }
   /** Move forward to the nearest square of this type and resolve it. */
   | { kind: 'goto'; square: 'training' | 'scout'; text: string }
-  | { kind: 'freeTraining'; text: string };
+  | { kind: 'freeTraining'; text: string }
+  /** The manager chooses: pay `cost` to calm things down, or play the next match with bad morale. */
+  | { kind: 'crisisChoice'; cost: number; text: string }
+  /** Every player in the squad loses this much fitness. */
+  | { kind: 'fatigue'; amount: number; text: string }
+  /** The club's next home league match brings no gate money. */
+  | { kind: 'boycott'; text: string }
+  /** The club's next home league match is a sell-out and brings double gate money. */
+  | { kind: 'sellout'; text: string }
+  /** The manager chooses: bank `amount`, or pass it on to the players for good morale in the next match. */
+  | { kind: 'windfall'; amount: number; text: string }
+);
 
 /** The deck drawn from on a press square. `{p}` is replaced with the affected player's name. */
 export const CARDS: Card[] = [
@@ -134,7 +150,7 @@ export const CARDS: Card[] = [
   { kind: 'spirit', amount: 2, text: '{p} pelaa koko ottelun murtuneella varpaalla eikä valita. Sisu nousee kahdella.' },
   { kind: 'spirit', amount: -1, text: '{p} riitelee valmentajan kanssa ja murjottaa. Sisu laskee.' },
   { kind: 'surge', text: 'Kannattajat lupaavat laulaa loppuun asti. Seuraavassa sarjaottelussa saatte varman maalipaikan lisäajalla.' },
-  { kind: 'fitness', text: 'Seura palkkaa kuntovalmentajan viikoksi. Koko joukkueen kunto palautuu täyteen.' },
+  { kind: 'fitness', lucky: true, text: 'Seura palkkaa kuntovalmentajan viikoksi. Koko joukkueen kunto palautuu täyteen.' },
   { kind: 'leave', text: '{p} on saanut tarpeekseen valmentajasta ja lähtee seurasta.' },
   { kind: 'leave', text: '{p} saa ulkomailta tarjouksen, josta ei voi kieltäytyä, ja lähtee.' },
   { kind: 'raid', text: 'Ulkomainen suurseura on seurannut sarjan kärkeä ja tekee tarjouksen, josta ei voi kieltäytyä.' },
@@ -147,7 +163,14 @@ export const CARDS: Card[] = [
   { kind: 'legend', text: 'Leo Kaukomies, vanha mestari, haluaa vielä pelata. Rahasta hän ei välitä: hän pelaa huvikseen. Hänestä järjestetään huutokauppa.' },
   { kind: 'renegotiate', text: 'Parhaan pelaajasi agentti haluaa neuvotella sopimuksen uusiksi. Pelaajasta järjestetään huutokauppa: pidät hänet vain, jos tarjoat eniten.' },
   { kind: 'steal', text: 'Tunnet oikeat ihmiset. Saat houkutella minkä tahansa pelaajan toisesta seurasta ilmaiseksi.' },
-  { kind: 'expire', text: 'Parhaan pelaajasi sopimus on päässyt umpeutumaan, ja hän kävelee ulos ilmaiseksi.' },
+  { kind: 'expire', crisis: true, text: 'Parhaan pelaajasi sopimus on päässyt umpeutumaan, ja hän kävelee ulos ilmaiseksi.' },
+  { kind: 'cash', amount: -30, crisis: true, text: 'Puheenjohtaja on kavaltanut seuran kassasta rahaa ja kadonnut ulkomaille.' },
+  { kind: 'crisisChoice', cost: 20, crisis: true, text: 'Pelaajat uhkaavat lakolla, koska bonukset ovat maksamatta. Maksat ne heti, tai joukkue pelaa seuraavan ottelun huonolla vireellä.' },
+  { kind: 'fatigue', amount: 2, crisis: true, text: 'Vierasmatkan hotellin noutopöytä kaataa koko joukkueen vuoteeseen. Jokaisen pelaajan kunto laskee kahdella.' },
+  { kind: 'cash', amount: 30, lucky: true, text: 'Edesmennyt kannattaja on muistanut seuraa testamentissaan.' },
+  { kind: 'windfall', amount: 20, lucky: true, text: 'Paikallinen yrittäjä haluaa palkita joukkueen. Otat rahat seuran kassaan tai lupaat ne pelaajille, jolloin joukkue pelaa seuraavan ottelun hyvässä vireessä.' },
+  { kind: 'sellout', lucky: true, text: 'Seuraava kotiottelunne myydään loppuun, ja jonot ulottuvat torille asti. Lipputulot ovat kaksinkertaiset.' },
+  { kind: 'boycott', crisis: true, text: 'Kannattajat ovat saaneet tarpeekseen seurajohdosta ja jättävät seuraavan kotiottelun väliin. Siitä ei kerry lipputuloja.' },
   { kind: 'wealthTax', share: 0.15, text: 'Verotarkastaja kiinnostuu liigan rikkaimmasta seurasta.' },
   { kind: 'youth', text: 'Junioripäällikkö tuo harjoituksiin lupaavan nuoren. Hän liittyy joukkueeseen ilmaiseksi.' },
   { kind: 'collect', amount: 10, text: 'Seurasi täyttää pyöreitä vuosia, ja jokainen muu manageri tuo lahjan.' },

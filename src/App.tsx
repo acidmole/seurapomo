@@ -61,6 +61,7 @@ export default function App() {
         <h1><Wordmark /></h1>
         <div className="topbar-info">
           <span>Kausi {game.season}</span>
+          {week && <span>Viikko {week.no + 1}/{game.calendar[game.calendar.length - 1].no + 1}</span>}
           <span>
             {week?.kind === 'cup' ? `Cup: ${CUP_ROUND_NAMES[week.index]}`
               : week?.kind === 'euro' ? `Eurocupit: ${EURO_ROUND_NAMES[week.index]}`

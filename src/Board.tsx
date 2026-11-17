@@ -105,6 +105,8 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         <Die value={game.die ?? 1} />
         <div>
           <strong className="display">{square?.name}</strong>
+          {game.notice?.mark === 'crisis' && <span className="mark crisis">Kriisi</span>}
+          {game.notice?.mark === 'lucky' && <span className="mark lucky">Onnenpotku</span>}
           <div className="muted small">{square?.help}</div>
         </div>
       </div>
@@ -171,7 +173,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           })}
         </ul>
         {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat tarjota.</p>}
-        {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia oikealta ja tarjota sitten.</p>}
+        {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia tai ottaa lainaa oikealta ja tarjota sitten.</p>}
         {bidder.auto ? thinking : (
         <div className="row">
           {[0, 5, 20, 45].map((extra) => (
@@ -188,6 +190,22 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         </div>
         )}
       </>
+    );
+  } else if (p?.kind === 'crisis') {
+    body = (
+      <div className="row">
+        <button className="primary" disabled={me.cash < p.cost} onClick={() => dispatch({ type: 'CRISIS', pay: true })}>
+          Maksa {fmt(p.cost)}
+        </button>
+        <button onClick={() => dispatch({ type: 'CRISIS', pay: false })}>Älä maksa</button>
+      </div>
+    );
+  } else if (p?.kind === 'windfall') {
+    body = (
+      <div className="row">
+        <button className="primary" onClick={() => dispatch({ type: 'WINDFALL', keep: true })}>Ota {fmt(p.amount)} kassaan</button>
+        <button onClick={() => dispatch({ type: 'WINDFALL', keep: false })}>Lupaa rahat pelaajille</button>
+      </div>
     );
   } else if (p?.kind === 'steal') {
     body = <StealPanel game={game} dispatch={dispatch} />;
@@ -236,16 +254,16 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     body = isBroke(me) ? (
       <>
         <p className="neg">
-          Olet velkaa {fmt(-me.cash)}, eikä myytävää ole: joukkueessa on enää {MIN_SQUAD} pelaajaa. Seura menee
-          konkurssiin, ja putoat pelistä.
+          Olet velkaa {fmt(-me.cash)}, eikä myytävää ole: joukkueessa on enää {MIN_SQUAD} pelaajaa, eikä pankki
+          lainaa enää tarpeeksi. Seura menee konkurssiin, ja putoat pelistä.
         </p>
         <button className="danger big" onClick={() => dispatch({ type: 'BANKRUPT' })}>Konkurssi</button>
       </>
     ) : mustSell(me) ? (
       <>
         <p className="neg">
-          Olet velkaa {fmt(-me.cash)}. Myy pelaajia oikealta, kunnes kassa on plussalla. Jos pelaajia jää alle{' '}
-          {MIN_SQUAD}, putoat pelistä.
+          Olet velkaa {fmt(-me.cash)}. Myy pelaajia tai ota pankkilainaa oikealta, kunnes kassa on plussalla.
+          Joukkueessa on oltava vähintään {MIN_SQUAD} pelaajaa.
         </p>
         <button className="primary big" disabled>Lopeta vuoro</button>
       </>

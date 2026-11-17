@@ -1,13 +1,13 @@
 import { FORMATIONS, type FormationId } from './data';
 import {
-  MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, expectedChances, isBroke, lineup,
-  mustSell, valueOf, reduce, scoringOdds, sellPrice, thisWeek, trainingCost, wages,
+  LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, expectedChances, isBroke, lineup,
+  loanInterest, loanRoom, mustSell, plays, valueOf, reduce, scoringOdds, sellPrice, thisWeek, trainingCost, wages,
   type Action, type Club, type GameState, type Player,
 } from './engine';
 
 /** Weeks of wages the computer keeps in the bank before it spends on anything. */
 const RESERVE_WEEKS = 2;
-const spare = (c: Club) => c.cash - RESERVE_WEEKS * wages(c);
+const spare = (c: Club) => c.cash - RESERVE_WEEKS * (wages(c) + loanInterest(c));
 /**
  * What the computer can put into a bid. For a player who would start, it is prepared to sell from the bench
  * to pay for him, as a person would, so the bench's sale value counts as money in hand.
@@ -66,7 +66,7 @@ function bestFormation(s: GameState, me: Club): FormationId {
 
 /** Would this player walk into the starting eleven? */
 function improves(c: Club, p: Player): boolean {
-  const slots = lineup(c).slots.filter((x) => x.pos === p.pos);
+  const slots = lineup(c).slots.filter((x) => plays(p, x.pos));
   return slots.some((x) => x.eff < p.skill);
 }
 
@@ -117,6 +117,9 @@ export function botAction(s: GameState): Action {
       .sort((a, b) => b.skill - a.skill)[0];
     return pupil ? { type: 'TRAIN', playerId: pupil.id } : { type: 'SKIP' };
   }
+  // Money in the bank, except before a knockout tie, where one match decides everything.
+  if (p?.kind === 'windfall') return { type: 'WINDFALL', keep: !(hasTie(s, me) && me.morale < 1) };
+  if (p?.kind === 'crisis') return { type: 'CRISIS', pay: spare(me) >= p.cost };
   if (p?.kind === 'steal') {
     const target = s.clubs
       .filter((c) => c.id !== me.id && c.squad.length > MIN_SQUAD)
@@ -126,7 +129,14 @@ export function botAction(s: GameState): Action {
   }
 
   if (isBroke(me)) return { type: 'BANKRUPT' };
-  if (mustSell(me)) return { type: 'SELL', playerId: worstFirst(me)[0].id };
+  if (mustSell(me)) {
+    // Reserves go first. Once only the first eleven is left to sell, the bank is the better way out.
+    const starters = new Set(lineup(me).slots.flatMap((x) => (x.player ? [x.player.id] : [])));
+    const weakest = worstFirst(me)[0];
+    const lastResort = me.squad.length <= MIN_SQUAD || starters.has(weakest.id);
+    if (lastResort && loanRoom(me) >= LOAN_STEP) return { type: 'BORROW' };
+    return { type: 'SELL', playerId: weakest.id };
+  }
 
   const formation = bestFormation(s, me);
   if (formation !== me.formation) return { type: 'SET_FORMATION', formation };
@@ -136,6 +146,8 @@ export function botAction(s: GameState): Action {
     if (hasTie(s, me) && me.morale < 1 && spare(me) >= MATCH_BONUS_COST) return { type: 'MATCH_BONUS' };
     return { type: 'ROLL' };
   }
+  // Interest eats money every week, so the loan is paid down as soon as there is cash to spare.
+  if (me.loan > 0 && spare(me) >= Math.min(LOAN_STEP, me.loan)) return { type: 'REPAY' };
   return { type: 'END_TURN' };
 }
 
@@ -144,7 +156,7 @@ export function botAction(s: GameState): Action {
  * get a turn moving again, so a computer manager can never leave the game stuck.
  */
 export function botStep(s: GameState): GameState {
-  const fallbacks: Action[] = [botAction(s), { type: 'PASS' }, { type: 'SKIP' }, { type: 'ROLL' }, { type: 'END_TURN' }, { type: 'BANKRUPT' }];
+  const fallbacks: Action[] = [botAction(s), { type: 'PASS' }, { type: 'SKIP' }, { type: 'CRISIS', pay: false }, { type: 'WINDFALL', keep: true }, { type: 'ROLL' }, { type: 'END_TURN' }, { type: 'BANKRUPT' }];
   for (const action of fallbacks) {
     const next = reduce(s, action);
     if (next !== s) return next;

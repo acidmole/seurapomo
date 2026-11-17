@@ -25,18 +25,34 @@ export const MATCH_BONUS_COST = 15;
 /** Extra ticket income per league win in a row, up to five. */
 export const STREAK_GATE = 5;
 export const SELL_RATE = 0.6;
+/** The bank lends in lumps of this size, up to LOAN_MAX in all. */
+export const LOAN_STEP = 25;
+export const LOAN_MAX = 100;
+/** Interest on a bank loan, charged every week along with the wages. */
+export const LOAN_INTEREST = 0.04;
 export const MAX_LEVEL = 9;
 export const FULL_FITNESS = 9;
-/** A starter is tired at this fitness or below (one level off) and exhausted at 1 (two levels off). */
+/** The fitness a new player arrives with, and everyone starts a season with. */
+export const START_FITNESS = 9;
+/** A starter is tired at this fitness or below (one level off) and exhausted at EXHAUSTED_AT or below (two levels off). */
 export const TIRED_AT = 3;
-/** Fitness lost per match started, and regained by everyone after each league round. */
-export const MATCH_FATIGUE = 3;
-export const ROUND_RECOVERY = 3;
+export const EXHAUSTED_AT = 1;
+/** Fitness lost per match started. */
+export const MATCH_FATIGUE = 1;
+/** Fitness regained by a player who starts no match all week. Nothing else brings it back. */
+export const REST_RECOVERY = 3;
+/** A club the computer picks the team for rests a tired starter if his cover is at most this many levels worse. */
+export const REST_COVER_GAP = 2;
 
 export interface Player {
   id: number;
   name: string;
   pos: Pos;
+  /**
+   * A utility player's second line. He is a midfielder who plays there just as well: a defensive midfielder
+   * also in defence, an attacking midfielder also up front.
+   */
+  also?: 'PU' | 'HY';
   /** What the player can do when fresh. */
   skill: number;
   /**
@@ -50,8 +66,10 @@ export interface Player {
   form?: { amount: number; matches: number | null };
   /** The legend: his value and wages are a fraction of what his skill would normally cost. */
   legend?: boolean;
-  /** The manager has told him to sit out this week's match. */
+  /** The manager has told him to sit out this week's matches. */
   resting?: boolean;
+  /** He has started a match this week, so the week brings him no recovery. */
+  played?: boolean;
   /** League matches the player still misses. */
   out: number;
   outReason?: 'injury' | 'ban';
@@ -63,6 +81,8 @@ export interface Club {
   human: boolean;
   color: string;
   cash: number;
+  /** What the club owes the bank. Interest is charged on it every week. */
+  loan: number;
   squad: Player[];
   formation: FormationId;
   boardPos: number;
@@ -72,6 +92,10 @@ export interface Club {
   auto?: boolean;
   /** A card has promised a stoppage-time chance in the next league match. */
   surge?: boolean;
+  /** The supporters stay away from the next home league match: no gate money. */
+  boycott?: boolean;
+  /** The next home league match is a sell-out: double gate money. */
+  sellout?: boolean;
   /** A manager who could not pay his debts. The computer runs the club from then on. */
   bankrupt?: boolean;
 }
@@ -99,7 +123,12 @@ export interface Tie { a: Entrant; b: Entrant; ag: number | null; bg: number | n
 export interface EuroComp { tier: number; rounds: Tie[][] }
 
 /** One week of the season. `index` is the round within that competition. */
-export interface Week { kind: 'league' | 'cup' | 'euro'; index: number }
+/**
+ * One matchday. `no` is the week it falls in: a league round and the cup or European quarter-final tie that
+ * follows it share a week, while the European semi-finals and finals have weeks of their own. The managers take
+ * a turn on the board before every matchday.
+ */
+export interface Week { kind: 'league' | 'cup' | 'euro'; index: number; no: number }
 
 export type Pending =
   | { kind: 'auctionPick'; options: Player[] }
@@ -116,14 +145,20 @@ export type Pending =
   /** The manager may take any one player from another club. */
   | { kind: 'steal' }
   | { kind: 'scout'; options: Player[] }
-  | { kind: 'training'; free: boolean };
+  | { kind: 'training'; free: boolean }
+  /** A crisis the manager can buy his way out of. */
+  | { kind: 'crisis'; cost: number }
+  /** Money on offer: the manager banks it or passes it on to the players. */
+  | { kind: 'windfall'; amount: number };
+
+export type Mark = 'crisis' | 'lucky';
 
 export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 25;
+export const STATE_VERSION = 29;
 
 export interface GameState {
   version: number;
@@ -155,7 +190,7 @@ export interface GameState {
   phase: Phase;
   die: number | null;
   pending: Pending | null;
-  notice: { square: number; lines: string[] } | null;
+  notice: { square: number; lines: string[]; /** The card drawn was a crisis or a stroke of luck. */ mark?: Mark } | null;
   /** The season week by week: league rounds, with cup and European rounds on weeks of their own in between. */
   calendar: Week[];
   /** Index into `calendar` of the week being played. */
@@ -174,9 +209,17 @@ export type Action =
   | { type: 'SCOUT_BUY'; index: number }
   | { type: 'TRAIN'; playerId: number }
   | { type: 'SKIP' }
+  /** Answer a crisis: pay up, or take the bad morale. */
+  | { type: 'CRISIS'; pay: boolean }
+  /** Answer a windfall: keep the money, or give it to the players for good morale. */
+  | { type: 'WINDFALL'; keep: boolean }
   | { type: 'STEAL'; clubId: number; playerId: number }
   | { type: 'SET_FORMATION'; formation: FormationId }
   | { type: 'SELL'; playerId: number }
+  /** Take one more lump from the bank. */
+  | { type: 'BORROW' }
+  /** Pay one lump of the loan back. */
+  | { type: 'REPAY' }
   | { type: 'REST'; playerId: number }
   /** Promise the players a bonus for the next match. */
   | { type: 'MATCH_BONUS' }
@@ -225,12 +268,23 @@ export function playerValue(skill: number, spirit = 5): number {
 
 /** The level a player actually plays at: skill plus current form, less one when tired and two when exhausted. */
 export function level(p: Player): number {
-  const tired = (p.fitness <= TIRED_AT ? 1 : 0) + (p.fitness <= 1 ? 1 : 0);
+  const tired = (p.fitness <= TIRED_AT ? 1 : 0) + (p.fitness <= EXHAUSTED_AT ? 1 : 0);
   return Math.max(1, Math.min(MAX_LEVEL, p.skill + (p.form?.amount ?? 0) - tired));
 }
-/** What a player is worth: by skill and sisu, except that the legend comes at a discount. */
+/** Share of new outfield players who can play in two lines. */
+export const UTILITY_SHARE = 0.15;
+/** A player who covers two lines is worth this much more than another of the same skill. */
+export const UTILITY_PREMIUM = 1.15;
+/** Can the player take a place in this line at his full level? */
+export const plays = (p: Player, pos: Pos) => p.pos === pos || p.also === pos;
+/** The player's position in words; a utility player has a name of his own. */
+export const posName = (p: Player) => (p.also === 'PU' ? 'puolustava keskikenttä' : p.also === 'HY' ? 'hyökkäävä keskikenttä' : POS_NAME[p.pos]);
+/** The same as a two-letter badge. */
+export const posBadge = (p: Player) => (p.also === 'PU' ? 'PK' : p.also === 'HY' ? 'HK' : p.pos);
+/** What a player is worth: by skill and sisu, more if he covers two lines, except that the legend comes at a discount. */
 export function valueOf(p: Player): number {
-  const full = playerValue(p.skill, p.spirit);
+  const plain = playerValue(p.skill, p.spirit);
+  const full = p.also ? Math.round((plain * UTILITY_PREMIUM) / 5) * 5 : plain;
   return p.legend ? Math.round((full * LEGEND.discount) / 5) * 5 : full;
 }
 export const sellPrice = (p: Player) => Math.round(valueOf(p) * SELL_RATE);
@@ -252,13 +306,17 @@ function newName(s: GameState): string {
   return `${drawName(s, 'first', FIRST_NAMES)} ${drawName(s, 'last', LAST_NAMES)}`;
 }
 
-function newPlayer(s: GameState, pos: Pos, skill: number): Player {
+function newPlayer(s: GameState, line: Pos, skill: number): Player {
+  // Some outfield players turn out to be utility players: midfielders who also cover the line they were meant for.
+  const utility = line !== 'MV' && rand(s) < UTILITY_SHARE;
+  const also = !utility ? undefined : line === 'KK' ? pick(s, ['PU', 'HY'] as const) : (line as 'PU' | 'HY');
   return {
     id: s.nextId++,
     name: newName(s),
-    pos,
+    pos: utility ? 'KK' : line,
+    ...(also ? { also } : {}),
     skill: Math.max(1, Math.min(MAX_LEVEL, skill)),
-    fitness: FULL_FITNESS,
+    fitness: START_FITNESS,
     spirit: 1 + randInt(s, 5) + randInt(s, 5),
     out: 0,
   };
@@ -283,15 +341,13 @@ export interface Slot { pos: Pos; player: Player | null; eff: number }
 export interface Strength { att: number; mid: number; def: number; gk: number; /** Average sisu of the starters. */ spirit: number; shape: Shape }
 export interface Lineup extends Strength { slots: Slot[] }
 
-/** Best available eleven for the club's formation. Gaps are filled out of position at half skill. */
-export function lineup(club: Club): Lineup {
-  const f = FORMATIONS[club.formation];
-  const avail = club.squad.filter((p) => p.out === 0 && !p.resting).sort((a, b) => level(b) - level(a) || b.skill - a.skill);
+/** The eleven that results when each utility player is told which of his two lines to play in. */
+function pickEleven(f: Shape, avail: Player[], lineOf: (p: Player) => Pos): Slot[] {
   const used = new Set<number>();
   const slots: Slot[] = [];
   const need: [Pos, number][] = [['MV', 1], ['PU', f.PU], ['KK', f.KK], ['HY', f.HY]];
   for (const [pos, n] of need) {
-    const own = avail.filter((p) => p.pos === pos).slice(0, n);
+    const own = avail.filter((p) => lineOf(p) === pos).slice(0, n);
     for (const p of own) {
       used.add(p.id);
       slots.push({ pos, player: p, eff: level(p) });
@@ -304,7 +360,30 @@ export function lineup(club: Club): Lineup {
     if (!p) break;
     used.add(p.id);
     slot.player = p;
-    slot.eff = slot.pos === 'MV' ? 1 : Math.max(1, Math.floor(level(p) / 2));
+    slot.eff = slot.pos === 'MV' || plays(p, slot.pos) ? (slot.pos === 'MV' ? 1 : level(p)) : Math.max(1, Math.floor(level(p) / 2));
+  }
+  return slots;
+}
+
+/**
+ * Best available eleven for the club's formation. Utility players go to whichever of their two lines makes the
+ * eleven strongest. Gaps are filled out of position at half skill.
+ */
+export function lineup(club: Club): Lineup {
+  const f = FORMATIONS[club.formation];
+  const avail = club.squad.filter((p) => p.out === 0 && !p.resting).sort((a, b) => level(b) - level(a) || b.skill - a.skill);
+  // Every way of dealing the best few utility players to their lines is tried; there are rarely more than two or three.
+  const flexible = avail.filter((p) => p.also).slice(0, 6);
+  let slots: Slot[] = [];
+  let best = -1;
+  for (let mask = 0; mask < 1 << flexible.length; mask++) {
+    const moved = new Set(flexible.filter((_, i) => mask & (1 << i)).map((p) => p.id));
+    const tried = pickEleven(f, avail, (p) => (moved.has(p.id) ? p.also! : p.pos));
+    const total = tried.reduce((sum, x) => sum + x.eff, 0);
+    if (total > best) {
+      best = total;
+      slots = tried;
+    }
   }
   const starters = slots.flatMap((x) => (x.player ? [x.player] : []));
   const sum = (pos: Pos) => slots.filter((x) => x.pos === pos).reduce((t, x) => t + x.eff, 0);
@@ -402,15 +481,12 @@ export function spiritBonus(x: Strength, y: Strength, tough: boolean): number {
 /** Chance that `x` wins a penalty shoot-out against `y`: nerve decides. */
 export const shootoutOdds = (x: Strength, y: Strength) => Math.max(0.2, Math.min(0.8, 0.5 + 0.06 * (x.spirit - y.spirit)));
 
-/**
- * Starters pay for the match and everyone who sat it out recovers. A league week gives the starters the same
- * back, so only the extra cup and European weeks wear a player down.
- */
-function applyFatigue(c: Club, played: Lineup, leagueRound: boolean) {
-  const started = new Set(played.slots.flatMap((x) => (x.player ? [x.player.id] : [])));
-  for (const p of c.squad) {
-    if (started.has(p.id)) p.fitness = Math.max(1, p.fitness - MATCH_FATIGUE);
-    if (leagueRound || !started.has(p.id)) p.fitness = Math.min(FULL_FITNESS, p.fitness + ROUND_RECOVERY);
+/** Every match started costs fitness. Only a whole week without a start brings any back: see `endWeek`. */
+function applyFatigue(c: Club, played: Lineup) {
+  for (const x of played.slots) {
+    if (!x.player) continue;
+    x.player.fitness = Math.max(1, x.player.fitness - MATCH_FATIGUE);
+    x.player.played = true;
   }
 }
 
@@ -530,9 +606,13 @@ function startRound(s: GameState) {
   s.phase = n ? 'roll' : 'gameOver';
 }
 
-/** A manager must clear his debts by selling players; with only eleven left there is nothing to sell. */
+/** A manager must clear his debts before ending his turn, by selling players or borrowing from the bank. */
 export const mustSell = (c: Club) => c.human && c.cash < 0;
-export const isBroke = (c: Club) => mustSell(c) && c.squad.length <= MIN_SQUAD;
+/** How much more the bank is willing to lend. */
+export const loanRoom = (c: Club) => Math.max(0, LOAN_MAX - c.loan);
+export const loanInterest = (c: Club) => Math.round(c.loan * LOAN_INTEREST);
+/** With only eleven players left there is nothing to sell, and the bank's money no longer covers the debt. */
+export const isBroke = (c: Club) => mustSell(c) && c.squad.length <= MIN_SQUAD && c.cash + loanRoom(c) < 0;
 function log(s: GameState, line: string) {
   s.log.push(line);
   if (s.log.length > 80) s.log.shift();
@@ -543,10 +623,14 @@ function startSeason(s: GameState) {
   s.week = 0;
   s.schedule = makeSchedule(s);
   s.calendar = [];
+  let no = 0;
   for (let i = 0; i < ROUNDS; i++) {
-    s.calendar.push({ kind: 'league', index: i });
-    if (CUP_AFTER.includes(i)) s.calendar.push({ kind: 'cup', index: CUP_AFTER.indexOf(i) });
-    if (EURO_AFTER.includes(i)) s.calendar.push({ kind: 'euro', index: EURO_AFTER.indexOf(i) });
+    s.calendar.push({ kind: 'league', index: i, no });
+    if (CUP_AFTER.includes(i)) s.calendar.push({ kind: 'cup', index: CUP_AFTER.indexOf(i), no });
+    const euro = EURO_AFTER.indexOf(i);
+    // The quarter-finals are squeezed into a league week; the semi-finals and finals get a week to themselves.
+    if (euro >= 0) s.calendar.push({ kind: 'euro', index: euro, no: euro === 0 ? no : ++no });
+    no++;
   }
   const lowerNames = shuffle(s, [...LOWER_CLUBS]);
   const cupEntrants: Entrant[] = s.clubs.map((c) => ({ clubId: c.id, name: '', level: 0 }));
@@ -594,6 +678,7 @@ export function createGame(config: GameConfig): GameState {
       ...(human?.computer ? { auto: true } : {}),
       color: human ? human.color : '#7b8794',
       cash: START_CASH,
+      loan: 0,
       squad: newSquad(s, human ? 0 : aiOffsets[ai]),
       formation: human ? '4-4-2' : pick(s, ['4-4-2', '4-3-3', '5-3-2', '3-4-3', '4-4-2'] as FormationId[]),
       boardPos: 0,
@@ -615,6 +700,11 @@ function payWages(c: Club, lines: string[]) {
   const w = wages(c);
   c.cash -= w;
   lines.push(`Viikon palkat: maksat ${fmt(w)}.`);
+  const interest = loanInterest(c);
+  if (interest > 0) {
+    c.cash -= interest;
+    lines.push(`Pankkilainan korko: maksat ${fmt(interest)}.`);
+  }
 }
 
 function addYouth(s: GameState, c: Club, lines: string[]) {
@@ -624,7 +714,7 @@ function addYouth(s: GameState, c: Club, lines: string[]) {
   }
   const p = newPlayer(s, randomPos(s), 2 + randInt(s, 3));
   c.squad.push(p);
-  lines.push(`Joukkueeseen nousee ${p.name} (${POS_NAME[p.pos]}, taso ${p.skill}).`);
+  lines.push(`Joukkueeseen nousee ${p.name} (${posName(p)}, taso ${p.skill}).`);
 }
 
 /** Managers from best-placed to worst-placed in the league. Bad luck looks for the first, good luck for the last. */
@@ -641,7 +731,8 @@ function startAuction(
 
 const bestPlayer = (c: Club) => [...c.squad].sort((a, b) => b.skill - a.skill || b.spirit - a.spirit)[0] as Player | undefined;
 
-function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
+/** Plays the card for the club and tells whether it was a crisis or a stroke of luck. */
+function playCard(s: GameState, c: Club, card: Card, lines: string[]): Mark | undefined {
   const starters = lineup(c).slots.flatMap((x) => (x.player ? [x.player] : []));
   const target = starters.length ? pick(s, starters) : null;
   const text = card.text.replace('{p}', target?.name ?? 'Pelaaja');
@@ -699,7 +790,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
       }
       const p = newPlayer(s, randomPos(s), 6 + randInt(s, 2));
       lucky.squad.push(p);
-      lines.push(`${lucky.name} on managereista heikoiten sijoittunut ja saa hänet ilmaiseksi: ${p.name} (${POS_NAME[p.pos]}, taito ${p.skill}).`);
+      lines.push(`${lucky.name} on managereista heikoiten sijoittunut ja saa hänet ilmaiseksi: ${p.name} (${posName(p)}, taito ${p.skill}).`);
       break;
     }
     case 'luckyDraw': {
@@ -709,7 +800,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
       }
       const p = newPlayer(s, randomPos(s), 2 + randInt(s, 7));
       c.squad.push(p);
-      lines.push(`Joukkueeseen liittyy ${p.name} (${POS_NAME[p.pos]}, taito ${p.skill}).`);
+      lines.push(`Joukkueeseen liittyy ${p.name} (${posName(p)}, taito ${p.skill}).`);
       break;
     }
     case 'legend': {
@@ -717,7 +808,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
         lines.push('Hän on kuitenkin jo löytänyt seuran.');
         break;
       }
-      const leo: Player = { ...newPlayer(s, LEGEND.pos, LEGEND.skill), name: LEGEND.name, spirit: LEGEND.spirit, legend: true };
+      const leo: Player = { ...newPlayer(s, LEGEND.pos, LEGEND.skill), pos: LEGEND.pos, also: undefined, name: LEGEND.name, spirit: LEGEND.spirit, legend: true };
       startAuction(s, leo, c.id, null);
       break;
     }
@@ -776,6 +867,23 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
     case 'fitness':
       for (const p of c.squad) p.fitness = FULL_FITNESS;
       break;
+    case 'fatigue':
+      for (const p of c.squad) p.fitness = Math.max(1, p.fitness - card.amount);
+      break;
+    case 'boycott':
+      c.boycott = true;
+      delete c.sellout;
+      break;
+    case 'sellout':
+      c.sellout = true;
+      delete c.boycott;
+      break;
+    case 'windfall':
+      s.pending = { kind: 'windfall', amount: card.amount };
+      break;
+    case 'crisisChoice':
+      s.pending = { kind: 'crisis', cost: card.cost };
+      break;
     case 'youth':
       addYouth(s, c, lines);
       break;
@@ -805,6 +913,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
       s.pending = { kind: 'training', free: true };
       break;
   }
+  return card.crisis ? 'crisis' : card.lucky ? 'lucky' : undefined;
 }
 
 function drawCard(s: GameState): Card {
@@ -816,7 +925,8 @@ function drawCard(s: GameState): Card {
 }
 
 /** Resolves the square the club stands on. */
-function landOn(s: GameState, c: Club, lines: string[]) {
+/** Resolves the square the club stands on and tells whether it brought a crisis or a stroke of luck. */
+function landOn(s: GameState, c: Club, lines: string[]): Mark | undefined {
   switch (BOARD[c.boardPos]) {
     case 'start':
       break;
@@ -850,8 +960,7 @@ function landOn(s: GameState, c: Club, lines: string[]) {
       addYouth(s, c, lines);
       break;
     case 'press':
-      playCard(s, c, drawCard(s), lines);
-      break;
+      return playCard(s, c, drawCard(s), lines);
     case 'training':
       s.pending = { kind: 'training', free: false };
       break;
@@ -862,11 +971,12 @@ function landOn(s: GameState, c: Club, lines: string[]) {
       s.pending = { kind: 'auctionPick', options: [0, 1].map(() => newPlayer(s, randomPos(s), 5 + Math.floor(Math.pow(rand(s), 1.5) * 5))) };
       break;
   }
+  return undefined;
 }
 
-function finishLanding(s: GameState, c: Club, lines: string[]) {
+function finishLanding(s: GameState, c: Club, lines: string[], mark?: Mark) {
   s.phase = 'manage';
-  s.notice = { square: c.boardPos, lines };
+  s.notice = { square: c.boardPos, lines, ...(mark ? { mark } : {}) };
   for (const line of lines) log(s, `${c.name}: ${line}`);
 }
 
@@ -881,8 +991,7 @@ function roll(s: GameState) {
     lines.push(`Kierros täynnä: saat kierrosbonuksen ${fmt(LAP_BONUS)}.`);
   }
   c.boardPos = (c.boardPos + die) % BOARD.length;
-  landOn(s, c, lines);
-  finishLanding(s, c, lines);
+  finishLanding(s, c, lines, landOn(s, c, lines));
 }
 
 /** Plays one specific card for the club whose turn it is, as if it had just been drawn. */
@@ -890,8 +999,7 @@ export function playCardNow(state: GameState, index: number): GameState {
   const s = structuredClone(state);
   const c = club(s, currentClubId(s));
   const lines: string[] = [];
-  playCard(s, c, CARDS[index], lines);
-  finishLanding(s, c, lines);
+  finishLanding(s, c, lines, playCard(s, c, CARDS[index], lines));
   return s;
 }
 
@@ -922,7 +1030,7 @@ function settleAuction(s: GameState) {
       ? `${winner.name} pitää pelaajansa: ${a.player.name} saa uuden sopimuksen, joka maksaa ${fmt(a.bid)}.`
       : a.owner !== null
         ? `${winner.name} vie pelaajan ${a.player.name} hintaan ${fmt(a.bid)}. ${club(s, a.owner).name} saa kauppahinnan.`
-        : `${winner.name} voittaa huutokaupan: ${a.player.name} (${POS_NAME[a.player.pos]}, taso ${a.player.skill}) hintaan ${fmt(a.bid)}.${sponsored ? ` Sponsori maksaa siitä ${fmt(sponsored)}.` : ''}`;
+        : `${winner.name} voittaa huutokaupan: ${a.player.name} (${posName(a.player)}, taso ${a.player.skill}) hintaan ${fmt(a.bid)}.${sponsored ? ` Sponsori maksaa siitä ${fmt(sponsored)}.` : ''}`;
     s.notice!.lines.push(line);
     log(s, line);
     s.pending = null;
@@ -930,16 +1038,49 @@ function settleAuction(s: GameState) {
 }
 
 /** Plays whatever this week holds: a league round, a cup round or a European round. */
+/**
+ * Where the computer picks the team, a tired starter gets the week off whenever somebody fresh and not much
+ * worse can take his place. A manager at the table decides this for himself.
+ */
+function restTheTired(c: Club) {
+  const xi = lineup(c);
+  const starters = new Set(xi.slots.flatMap((x) => (x.player ? [x.player.id] : [])));
+  const bench = c.squad.filter((p) => !starters.has(p.id) && p.out === 0 && !p.resting && p.fitness > TIRED_AT);
+  const taken = new Set<number>();
+  for (const slot of xi.slots) {
+    const p = slot.player;
+    if (!p || p.fitness > TIRED_AT) continue;
+    const cover = bench
+      .filter((b) => !taken.has(b.id) && plays(b, slot.pos) && b.skill >= p.skill - REST_COVER_GAP)
+      .sort((a, b) => b.skill - a.skill)[0];
+    if (!cover) continue;
+    taken.add(cover.id);
+    p.resting = true;
+  }
+}
+
+/** The week is over: whoever started no match in it recovers, and everybody is available again. */
+function endWeek(s: GameState) {
+  for (const c of s.clubs) {
+    for (const p of c.squad) {
+      if (!p.played) p.fitness = Math.min(FULL_FITNESS, p.fitness + REST_RECOVERY);
+      delete p.played;
+      delete p.resting;
+    }
+  }
+}
+
 function playMatchday(s: GameState) {
   const week = s.calendar[s.week];
+  if (s.calendar[s.week - 1]?.no !== week.no) {
+    for (const c of s.clubs) if (!c.human || c.auto) restTheTired(c);
+  }
   if (week.kind === 'league') playLeagueRound(s);
   else if (week.kind === 'cup') playCupRound(s, week.index);
   else {
     for (const comp of s.euro) playEuroRound(s, comp, week.index);
-    restOthers(s, s.euro.flatMap((comp) => comp.rounds[week.index]));
   }
-  // A rest lasts for one week's match.
-  for (const c of s.clubs) for (const p of c.squad) delete p.resting;
+  if (s.calendar[s.week + 1]?.no !== week.no) endWeek(s);
   s.results = week;
   s.phase = 'matchday';
   s.notice = null;
@@ -961,13 +1102,15 @@ function playLeagueRound(s: GameState) {
       MORALE_CHANCES * away.morale + spiritBonus(a, h, true),
       !!home.surge, !!away.surge,
     );
-    applyFatigue(home, h, true);
-    applyFatigue(away, a, true);
+    applyFatigue(home, h);
+    applyFatigue(away, a);
     f.hg = played.ag;
     f.ag = played.bg;
     f.chances = played.chances;
     f.events = played.events;
-    f.gate = gateIncome(posOf(home.id), posOf(away.id), streaks.get(home.id));
+    f.gate = home.boycott ? 0 : gateIncome(posOf(home.id), posOf(away.id), streaks.get(home.id)) * (home.sellout ? 2 : 1);
+    delete home.boycott;
+    delete home.sellout;
     home.cash += f.gate;
     log(s, `${home.name} – ${away.name} ${f.hg}–${f.ag}${home.human ? `. Lipputulot ${fmt(f.gate)}.` : ''}`);
   }
@@ -988,7 +1131,6 @@ function playCupRound(s: GameState, cupRound: number) {
     if (t.a.clubId !== null || t.b.clubId !== null) log(s, `Cup, ${CUP_ROUND_NAMES[cupRound].toLowerCase()}: ${tieLine(s, t)}`);
     return won;
   });
-  restOthers(s, ties);
   if (ties.length > 1) {
     s.cup.push(makeTies(winners));
     return;
@@ -1035,18 +1177,9 @@ function playTie(s: GameState, t: Tie, gate: number): Entrant {
     if (t.winner === 'a') t.ag++;
     else t.bg++;
   }
-  if (t.a.clubId !== null) applyFatigue(club(s, t.a.clubId), a as Lineup, false);
-  if (t.b.clubId !== null) applyFatigue(club(s, t.b.clubId), b as Lineup, false);
+  if (t.a.clubId !== null) applyFatigue(club(s, t.a.clubId), a as Lineup);
+  if (t.b.clubId !== null) applyFatigue(club(s, t.b.clubId), b as Lineup);
   return t[t.winner];
-}
-
-/** A cup or European week is a week off for every club not involved: their players recover. */
-function restOthers(s: GameState, ties: Tie[]) {
-  const playing = new Set(ties.flatMap((t) => [t.a.clubId, t.b.clubId]));
-  for (const c of s.clubs) {
-    if (playing.has(c.id)) continue;
-    for (const p of c.squad) p.fitness = Math.min(FULL_FITNESS, p.fitness + ROUND_RECOVERY);
-  }
 }
 
 function playEuroRound(s: GameState, comp: EuroComp, round: number) {
@@ -1087,7 +1220,7 @@ function nextSeason(s: GameState) {
   s.season++;
   for (const c of s.clubs) {
     c.morale = 0;
-    for (const p of c.squad) { p.out = 0; p.fitness = FULL_FITNESS; delete p.outReason; delete p.form; }
+    for (const p of c.squad) { p.out = 0; p.fitness = START_FITNESS; delete p.outReason; delete p.form; }
     if (!c.human) {
       for (let i = 0; i < 3; i++) {
         const p = pick(s, c.squad);
@@ -1099,8 +1232,8 @@ function nextSeason(s: GameState) {
 }
 
 export const squadValue = (c: Club) => c.squad.reduce((sum, p) => sum + valueOf(p), 0);
-/** What decides the game when the managers choose to count up: cash plus the value of the squad. */
-export const wealth = (c: Club) => c.cash + squadValue(c);
+/** What decides the game when the managers choose to count up: cash plus the value of the squad, less what is owed to the bank. */
+export const wealth = (c: Club) => c.cash + squadValue(c) - c.loan;
 
 function endTurn(s: GameState) {
   s.order.shift();
@@ -1119,6 +1252,7 @@ function goBankrupt(s: GameState, c: Club) {
   delete c.auto;
   c.bankrupt = true;
   c.cash = 0;
+  c.loan = 0;
   if (!c.squad.some((p) => p.pos === 'MV')) c.squad.push(newPlayer(s, 'MV', 3));
   while (c.squad.length < 14) c.squad.push(newPlayer(s, randomPos(s), 3));
   s.humans = s.humans.filter((id) => id !== c.id);
@@ -1174,7 +1308,7 @@ export function reduce(state: GameState, action: Action): GameState {
       if (!player || me.cash < valueOf(player) || me.squad.length >= MAX_SQUAD) return state;
       me.cash -= valueOf(player);
       me.squad.push(player);
-      const line = `Ostat pelaajan ${player.name} (${POS_NAME[player.pos]}, taso ${player.skill}) hintaan ${fmt(valueOf(player))}.`;
+      const line = `Ostat pelaajan ${player.name} (${posName(player)}, taso ${player.skill}) hintaan ${fmt(valueOf(player))}.`;
       s.notice!.lines.push(line);
       log(s, `${me.name}: ${line}`);
       s.pending = null;
@@ -1196,6 +1330,32 @@ export function reduce(state: GameState, action: Action): GameState {
       return s;
     }
 
+    case 'CRISIS': {
+      if (p?.kind !== 'crisis' || (action.pay && me.cash < p.cost)) return state;
+      if (action.pay) me.cash -= p.cost;
+      else me.morale = -1;
+      const line = action.pay
+        ? `Maksat ${fmt(p.cost)}, ja rauha palaa.`
+        : 'Et maksa. Seuraavassa ottelussa joukkue saa tavallista vähemmän maalipaikkoja.';
+      s.notice!.lines.push(line);
+      log(s, `${me.name}: ${line}`);
+      s.pending = null;
+      return s;
+    }
+
+    case 'WINDFALL': {
+      if (p?.kind !== 'windfall') return state;
+      if (action.keep) me.cash += p.amount;
+      else me.morale = 1;
+      const line = action.keep
+        ? `Otat ${fmt(p.amount)} seuran kassaan.`
+        : 'Lupaat rahat pelaajille. Seuraavassa ottelussa joukkue saa tavallista enemmän maalipaikkoja.';
+      s.notice!.lines.push(line);
+      log(s, `${me.name}: ${line}`);
+      s.pending = null;
+      return s;
+    }
+
     case 'SKIP':
       if (p?.kind !== 'scout' && p?.kind !== 'training' && p?.kind !== 'steal') return state;
       s.pending = null;
@@ -1208,7 +1368,7 @@ export function reduce(state: GameState, action: Action): GameState {
       if (!victim || i < 0 || victim.squad.length <= MIN_SQUAD) return state;
       const [taken] = victim.squad.splice(i, 1);
       me.squad.push(taken);
-      const line = `${me.name} houkuttelee pelaajan ${taken.name} (${POS_NAME[taken.pos]}, taito ${taken.skill}) seurasta ${victim.name}.`;
+      const line = `${me.name} houkuttelee pelaajan ${taken.name} (${posName(taken)}, taito ${taken.skill}) seurasta ${victim.name}.`;
       s.notice!.lines.push(line);
       log(s, line);
       s.pending = null;
@@ -1230,6 +1390,26 @@ export function reduce(state: GameState, action: Action): GameState {
       const [sold] = seller.squad.splice(i, 1);
       seller.cash += sellPrice(sold);
       log(s, `${seller.name} myy pelaajan ${sold.name} hintaan ${fmt(sellPrice(sold))}.`);
+      return s;
+    }
+
+    case 'BORROW': {
+      // Like selling, borrowing is allowed in the middle of an offer, to raise the money for it.
+      const borrower = club(s, actingClubId(s));
+      if (!inTurn || !borrower.human || loanRoom(borrower) < LOAN_STEP) return state;
+      borrower.loan += LOAN_STEP;
+      borrower.cash += LOAN_STEP;
+      log(s, `${borrower.name} ottaa pankkilainaa ${fmt(LOAN_STEP)}. Lainaa on nyt ${fmt(borrower.loan)}.`);
+      return s;
+    }
+
+    case 'REPAY': {
+      const payer = club(s, actingClubId(s));
+      const amount = Math.min(LOAN_STEP, payer.loan);
+      if (!inTurn || amount <= 0 || payer.cash < amount) return state;
+      payer.loan -= amount;
+      payer.cash -= amount;
+      log(s, `${payer.name} lyhentää pankkilainaa ${fmt(amount)}. Lainaa on jäljellä ${fmt(payer.loan)}.`);
       return s;
     }
 
