@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { BOARD, SQUARE_INFO, fmt } from './game/data';
 import {
-  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, isBroke, mustSell, playerValue, trainingCost,
+  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, isBroke, mustSell, valueOf, trainingCost,
   type Action, type GameState,
 } from './game/engine';
 import { Die, Icon, PlayerCard, ROLL_MS, TumblingDie, rattle } from './ui';
@@ -201,7 +201,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           <PlayerCard key={o.id} player={o}>
             <button
               className="primary"
-              disabled={full || me.cash < playerValue(o.skill, o.spirit)}
+              disabled={full || me.cash < valueOf(o)}
               onClick={() => dispatch({ type: 'SCOUT_BUY', index: i })}
             >
               Osta

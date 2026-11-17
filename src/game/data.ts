@@ -82,6 +82,8 @@ export type Card =
   | { kind: 'prodigy'; text: string }
   /** Pure luck: the drawer gets whoever is on top of the player pile, weak or strong. */
   | { kind: 'luckyDraw'; text: string }
+  /** The one legendary player comes up for auction. The card leaves the deck once a manager has signed him. */
+  | { kind: 'legend'; text: string }
   /** The drawer's best player is auctioned among all managers; the drawer keeps him only by bidding the most. */
   | { kind: 'renegotiate'; text: string }
   /** The drawer takes any one player from another club for free. Not for the best-placed manager. */
@@ -142,6 +144,7 @@ export const CARDS: Card[] = [
   { kind: 'prodigy', text: 'Lupaava nuori haluaa seuraan, jossa pääsee pelaamaan.' },
   { kind: 'luckyDraw', text: 'Nostat pelaajapakan päällimmäisen kortin. Pelaaja liittyy joukkueeseesi, oli hän kuka tahansa.' },
   { kind: 'luckyDraw', text: 'Vanha tuttu soittaa: hänen veljenpoikansa etsii seuraa. Otat hänet koeajalle näkemättä.' },
+  { kind: 'legend', text: 'Leo Kaukomies, vanha mestari, haluaa vielä pelata. Rahasta hän ei välitä: hän pelaa huvikseen. Hänestä järjestetään huutokauppa.' },
   { kind: 'renegotiate', text: 'Parhaan pelaajasi agentti haluaa neuvotella sopimuksen uusiksi. Pelaajasta järjestetään huutokauppa: pidät hänet vain, jos tarjoat eniten.' },
   { kind: 'steal', text: 'Tunnet oikeat ihmiset. Saat houkutella minkä tahansa pelaajan toisesta seurasta ilmaiseksi.' },
   { kind: 'expire', text: 'Parhaan pelaajasi sopimus on päässyt umpeutumaan, ja hän kävelee ulos ilmaiseksi.' },
@@ -189,15 +192,16 @@ export const FOREIGN_NAMES = [
 ];
 export const FOREIGN_SHARE = 0.15;
 
+/** The computer's league clubs. The first is in every game; the rest fill the remaining places in random order. */
 export const AI_CLUB_NAMES = [
-  'Koskenrannan Pallo',
-  'Satamakadun United',
-  'Tunturikylän Veikot',
-  'FC Kuusimäki',
-  'Hiekkaharjun Isku',
-  'Majakkasaaren Kiri',
-  'Myllypuron Toverit',
-  'Lokkiluodon Pallo',
+  'Kasiysi Rovers',
+  'Kyröskosken Pärske',
+  'Hanhivaaran Pallo',
+  'Luopion Kinkki',
+  'Billa FC',
+  'PeeTeeKoo',
+  'Kurvin Mutka',
+  'Futisgasellit',
 ];
 
 /** Invented opponents for the European cups. */
@@ -224,9 +228,9 @@ export interface EuroCompInfo {
 
 /** Index 0 is for the league champion, 1 for the runner-up, 2 for the third and fourth. */
 export const EURO_COMPS: EuroCompInfo[] = [
-  { name: 'Mestarien cup', gate: 80, entry: 60, win: 50, title: { winner: 300, finalist: 100 }, level: [6, 7.5] },
-  { name: 'Eurooppa-cup', gate: 45, entry: 40, win: 35, title: { winner: 200, finalist: 70 }, level: [5.5, 6.5] },
-  { name: 'Haastajacup', gate: 25, entry: 25, win: 25, title: { winner: 140, finalist: 50 }, level: [5, 6] },
+  { name: 'Mestarien cup', gate: 80, entry: 60, win: 50, title: { winner: 300, finalist: 100 }, level: [6.5, 8] },
+  { name: 'Eurooppa-cup', gate: 45, entry: 40, win: 35, title: { winner: 200, finalist: 70 }, level: [6, 7] },
+  { name: 'Haastajacup', gate: 25, entry: 25, win: 25, title: { winner: 140, finalist: 50 }, level: [5.5, 6.5] },
 ];
 export const EURO_ROUND_NAMES = ['Puolivälierät', 'Välierät', 'Loppuottelu'];
 
@@ -242,6 +246,14 @@ export const LOWER_CLUBS = [
   'Hietaniemen Haka', 'Sorsalammen Sirkat', 'Kalliokylän Karhut', 'Peltosaaren Pallo', 'Ruosteojan Rauta',
   'Honkarannan Henki', 'Ukkosvuoren Ukot', 'Lokkikallion Leisku',
 ];
+/**
+ * The legend: as good as a player gets, at half the price and half the wages of anyone else that good.
+ * There is only one of him in a game.
+ */
+export const LEGEND = { name: 'Leo Kaukomies', pos: 'HY' as Pos, skill: 9, spirit: 8, discount: 0.5 };
+
+/** Always in the third division, and always the weakest club in the cup. */
+export const WEAKEST_CLUB = { name: 'EPS/I', level: [1, 1.4] as [number, number] };
 export const CUP_SIZE = 32;
 /**
  * Average player level of the clubs below the league, [min, max], by division: half of them play in the

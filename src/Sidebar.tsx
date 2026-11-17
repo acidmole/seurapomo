@@ -270,7 +270,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             return (
               <tr key={p.id} className={slot ? '' : 'bench'}>
                 <td><span className="badge" title={POS_NAME[p.pos]}>{p.pos}</span></td>
-                <td className="left">{p.name}</td>
+                <td className="left">{p.name}{p.legend && <span className="robot legend" title="Legenda: puoleen hintaan ja puolella palkalla">Legenda</span>}</td>
                 <td>
                   <strong
                     className={level(p) < p.skill ? 'neg' : level(p) > p.skill ? 'pos' : ''}

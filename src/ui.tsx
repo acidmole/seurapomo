@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { POS_NAME, POS_PATTERN, fmt } from './game/data';
-import { level, playerValue, type Player } from './game/engine';
+import { level, valueOf, type Player } from './game/engine';
 
 /** A line icon drawn from one SVG path on a 24 × 24 grid. */
 export function Icon({ path }: { path: string }) {
@@ -93,9 +93,9 @@ export function PlayerCard({ player, children }: { player: Player; children?: Re
         <span className="roundel">{level(player)}</span>
       </div>
       <div className="player-card-main">
-        <strong>{player.name}</strong>
+        <strong>{player.name}{player.legend && <span className="robot legend">Legenda</span>}</strong>
         <span className="muted small">
-          {POS_NAME[player.pos]} · taito {player.skill} · sisu {player.spirit} · arvo {fmt(playerValue(player.skill, player.spirit))}
+          {POS_NAME[player.pos]} · taito {player.skill} · sisu {player.spirit} · arvo {fmt(valueOf(player))}
         </span>
       </div>
       {children}

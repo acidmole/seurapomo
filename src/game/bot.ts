@@ -1,13 +1,24 @@
 import { FORMATIONS, type FormationId } from './data';
 import {
   MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, expectedChances, isBroke, lineup,
-  mustSell, playerValue, reduce, scoringOdds, thisWeek, trainingCost, wages,
+  mustSell, valueOf, reduce, scoringOdds, sellPrice, thisWeek, trainingCost, wages,
   type Action, type Club, type GameState, type Player,
 } from './engine';
 
 /** Weeks of wages the computer keeps in the bank before it spends on anything. */
-const RESERVE_WEEKS = 4;
+const RESERVE_WEEKS = 2;
 const spare = (c: Club) => c.cash - RESERVE_WEEKS * wages(c);
+/**
+ * What the computer can put into a bid. For a player who would start, it is prepared to sell from the bench
+ * to pay for him, as a person would, so the bench's sale value counts as money in hand.
+ */
+function biddingPower(c: Club, p: Player): number {
+  if (!improves(c, p)) return spare(c);
+  const starters = new Set(lineup(c).slots.flatMap((x) => (x.player ? [x.player.id] : [])));
+  const bench = c.squad.filter((x) => !starters.has(x.id)).sort((a, b) => a.skill - b.skill);
+  const sellable = bench.slice(0, Math.max(0, Math.min(2, c.squad.length - 13)));
+  return spare(c) + sellable.reduce((sum, x) => sum + sellPrice(x), 0);
+}
 
 /** The league club this manager meets this week, if any. */
 function rivalOf(s: GameState, me: Club): Club | null {
@@ -61,7 +72,7 @@ function improves(c: Club, p: Player): boolean {
 
 /** What the computer is prepared to pay: full value for a starter, much less for a squad player. */
 function worth(c: Club, p: Player): number {
-  return playerValue(p.skill, p.spirit) * (improves(c, p) ? 1.05 : 0.55);
+  return valueOf(p) * (improves(c, p) ? 1.15 : 0.6);
 }
 
 const worstFirst = (c: Club) => {
@@ -78,9 +89,16 @@ export function botAction(s: GameState): Action {
     const bidder = s.clubs[actingClubId(s)];
     const min = p.leader === null ? p.minBid : p.bid + 5;
     const owner = p.owner === bidder.id;
-    const limit = owner ? playerValue(p.player.skill, p.player.spirit) * 1.1 : worth(bidder, p.player);
+    const limit = owner ? valueOf(p.player) * 1.1 : worth(bidder, p.player);
     const room = owner || bidder.squad.length < MAX_SQUAD;
-    return room && min <= limit && min <= Math.max(0, spare(bidder)) ? { type: 'BID', amount: min } : { type: 'PASS' };
+    if (!room || min > limit || min > biddingPower(bidder, p.player)) return { type: 'PASS' };
+    // Short of cash for a player worth having: sell the weakest reserve first, then bid.
+    if (min > bidder.cash) {
+      const starters = new Set(lineup(bidder).slots.flatMap((x) => (x.player ? [x.player.id] : [])));
+      const spareMan = bidder.squad.filter((x) => !starters.has(x.id) && x.id !== p.player.id).sort((a, b) => a.skill - b.skill)[0];
+      return spareMan && bidder.squad.length > MIN_SQUAD ? { type: 'SELL', playerId: spareMan.id } : { type: 'PASS' };
+    }
+    return { type: 'BID', amount: min };
   }
   if (p?.kind === 'auctionPick') {
     return { type: 'AUCTION_PICK', index: p.options[1].skill > p.options[0].skill ? 1 : 0 };
@@ -88,7 +106,7 @@ export function botAction(s: GameState): Action {
   if (p?.kind === 'scout') {
     const choice = p.options
       .map((o, index) => ({ o, index }))
-      .filter(({ o }) => improves(me, o) && playerValue(o.skill, o.spirit) <= spare(me))
+      .filter(({ o }) => improves(me, o) && valueOf(o) <= spare(me))
       .sort((a, b) => b.o.skill - a.o.skill)[0];
     return choice && me.squad.length < MAX_SQUAD ? { type: 'SCOUT_BUY', index: choice.index } : { type: 'SKIP' };
   }

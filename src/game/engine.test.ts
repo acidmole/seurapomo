@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
+import { AI_CLUB_NAMES, BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import { botAction, botStep, botToMove } from './bot';
 import {
-  EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, valueOf, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -41,6 +41,16 @@ function bot(s: GameState): Action {
   }
   if (s.phase === 'manage') return { type: 'END_TURN' };
   return { type: 'CONTINUE' };
+}
+
+/** Lets the test managers play until `done`. Fails instead of hanging if the game stops moving first. */
+function until(s: GameState, done: (s: GameState) => boolean): GameState {
+  for (let i = 0; !done(s); i++) {
+    const next = reduce(s, bot(s));
+    if (next === s || i > 40000) throw new Error(`the game stopped in phase ${s.phase} before the test got where it was going`);
+    s = next;
+  }
+  return s;
 }
 
 /** Plays on until the managers count up after the given season, or all go bankrupt. */
@@ -101,7 +111,7 @@ describe('money for form and morale', () => {
     s = reduce(s, { type: 'MATCH_BONUS' });
     expect(s.clubs[me]).toMatchObject({ cash: cash - MATCH_BONUS_COST, morale: 1 });
     expect(reduce(s, { type: 'MATCH_BONUS' })).toBe(s);
-    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'matchday'));
     expect(s.clubs[me].morale).toBe(0);
   });
 });
@@ -110,7 +120,7 @@ describe('cup and European ticket income', () => {
   it('pays every league club in a cup tie, more in later rounds', () => {
     let s = newGame(2, 5);
     for (const id of s.humans) s.clubs[id].cash = 5000;
-    while (s.results?.kind !== 'cup') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.results?.kind !== 'cup'));
     expect(s.cup[0].every((t) => t.gate === cupGate(0))).toBe(true);
     expect(cupGate(4)).toBeGreaterThan(cupGate(0));
   });
@@ -124,7 +134,7 @@ describe('cup and European ticket income', () => {
     let s = newGame(2, 5);
     for (const id of s.humans) s.clubs[id].cash = 5000;
     const top = s.qualified[0][0];
-    while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.results?.kind !== 'euro'));
     const before = s.clubs[top].cash;
     const tie = s.euro[0].rounds[0].find((t) => t.a.clubId === top || t.b.clubId === top)!;
     expect(tie.gate).toBe(euroGate(0, 0));
@@ -154,7 +164,7 @@ describe('ticket income', () => {
     expect(gateIncome(1, 2)).toBeGreaterThan(gateIncome(8, 7));
     let s = newGame(2, 7);
     const before = s.clubs.map((c) => c.cash);
-    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'matchday'));
     for (const f of s.schedule[0]) {
       const events = f.events!;
       expect(events.filter((e) => e.side === 0 && e.goal)).toHaveLength(f.hg!);
@@ -185,7 +195,7 @@ describe('cards', () => {
 
   it('draws from a shuffled deck without repeats', () => {
     let s = newGame(2, 3);
-    while (s.deck.length === 0) s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.deck.length === 0));
     expect(s.deck).toHaveLength(CARDS.length - 1);
     expect(new Set(s.deck).size).toBe(s.deck.length);
   });
@@ -200,8 +210,9 @@ describe('cards', () => {
     expect(s.pending.active).not.toContain(best);
     expect(s.pending.subsidy).toEqual({ club: worst, amount: 30 });
     const bid = s.pending.minBid;
+    s.clubs[worst].cash = 500;
     const cash = s.clubs[worst].cash;
-    while (s.pending?.kind === 'auction') {
+    for (let i = 0; i < 20 && s.pending?.kind === 'auction'; i++) {
       const bidder = s.pending.active[s.pending.idx];
       s = reduce(s, bidder === worst && s.pending.leader === null ? { type: 'BID', amount: bid } : { type: 'PASS' });
     }
@@ -217,7 +228,7 @@ describe('cards', () => {
     const find = () => s.clubs[me].squad.find((p) => p.id === player.id)!;
     for (const left of [1, undefined]) {
       const round = s.round;
-      while (s.round === round || s.phase === 'matchday') s = reduce(s, bot(s));
+      s = until(s, (s) => !(s.round === round || s.phase === 'matchday'));
       expect(find().form?.matches).toBe(left);
     }
     expect(find().skill).toBe(player.skill);
@@ -267,6 +278,32 @@ describe('cards', () => {
     start.clubs[start.humans[2]].cash = 1000;
     const taxed = playCardNow(start, find('wealthTax'));
     expect(taxed.clubs[start.humans[2]].cash).toBe(850);
+  });
+
+  it('brings the legend to auction once, at half the price and half the wages', () => {
+    let s = playCardNow(newGame(3, 9), find('legend'));
+    if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
+    const leo = s.pending.player;
+    expect(leo).toMatchObject({ name: 'Leo Kaukomies', skill: 9, legend: true });
+    expect(valueOf(leo)).toBe(Math.round(playerValue(9, leo.spirit) / 2 / 5) * 5);
+    expect(s.pending.minBid).toBeLessThan(playerValue(9, leo.spirit) / 3);
+
+    const buyer = s.pending.active[s.pending.idx];
+    s.clubs[buyer].cash = 500;
+    const wagesBefore = wages(s.clubs[buyer]);
+    s = reduce(s, { type: 'BID', amount: s.pending.minBid });
+    for (let i = 0; i < 10 && s.pending; i++) s = reduce(s, { type: 'PASS' });
+    expect(s.clubs[buyer].squad.some((p) => p.legend)).toBe(true);
+    expect(s.legendSigned).toBe(true);
+    // Nine levels of skill would normally add 9 × the weekly rate; he adds half of that.
+    expect(wages(s.clubs[buyer]) - wagesBefore).toBeLessThanOrEqual(Math.ceil(9 * 0.27 * 0.5) + 1);
+
+    // Once he has a club the card is no longer drawn, and playing it again does nothing.
+    expect(playCardNow(s, find('legend')).pending).toBeNull();
+    let later = s;
+    later.deck = [find('legend')];
+    for (let i = 0; i < 400 && later.phase !== 'matchday'; i++) later = reduce(later, bot(later));
+    expect(later.clubs.flatMap((c) => c.squad).filter((p) => p.legend)).toHaveLength(1);
   });
 
   it('auctions the best player when his contract is re-negotiated', () => {
@@ -471,13 +508,13 @@ describe('fitness and sisu', () => {
     let s = newGame(2, 4);
     const starters = new Set(lineup(s.clubs[0]).slots.map((x) => x.player!.id));
     for (const p of s.clubs[0].squad) p.fitness = 5;
-    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'matchday'));
     const stillThere = s.clubs[0].squad.filter((p) => starters.has(p.id));
     expect(stillThere.some((p) => p.fitness === 5)).toBe(true);
     expect(s.clubs[0].squad.some((p) => !starters.has(p.id) && p.fitness === 8)).toBe(true);
 
     // Round 2 is followed by the cup's first round: every league club plays twice that week.
-    while (s.results?.kind !== 'cup') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.results?.kind !== 'cup'));
     const inCup = s.cup[0].flatMap((t) => [t.a.clubId, t.b.clubId]);
     expect(s.clubs.filter((c) => inCup.includes(c.id)).every((c) => c.squad.some((p) => p.fitness <= 6))).toBe(true);
   });
@@ -491,7 +528,7 @@ describe('fitness and sisu', () => {
     expect(lineup(s.clubs[me]).slots.some((x) => x.player?.id === star.id)).toBe(false);
     expect(reduce(reduce(s, { type: 'REST', playerId: star.id }), { type: 'REST', playerId: star.id })).toEqual(s);
 
-    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'matchday'));
     const after = s.clubs[me].squad.find((p) => p.id === star.id);
     if (after) {
       expect(after.fitness).toBe(9);
@@ -508,7 +545,7 @@ describe('fitness and sisu', () => {
     let s = playCardNow(newGame(2, 4), CARDS.findIndex((c) => c.kind === 'surge'));
     const me = currentClubId(s);
     expect(s.clubs[me].surge).toBe(true);
-    while (s.phase !== 'matchday') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'matchday'));
     const match = s.schedule[0].find((f) => f.home === me || f.away === me)!;
     expect(match.events!.some((e) => e.minute > 90 && e.side === (match.home === me ? 0 : 1))).toBe(true);
     expect(s.clubs[me].surge).toBeUndefined();
@@ -575,13 +612,30 @@ describe('cup', () => {
     for (const division of [2, 3] as const) {
       const clubs = lower.filter((e) => e.division === division);
       expect(clubs).toHaveLength(11);
-      expect(clubs.every((e) => e.level >= LOWER_LEVELS[division][0] && e.level <= LOWER_LEVELS[division][1])).toBe(true);
+      const others = clubs.filter((e) => e.name !== 'EPS/I');
+      expect(others.every((e) => e.level >= LOWER_LEVELS[division][0] && e.level <= LOWER_LEVELS[division][1])).toBe(true);
+    }
+    // EPS/I is always there, in the bottom division, and weaker than everyone else.
+    const eps = lower.find((e) => e.name === 'EPS/I')!;
+    expect(eps.division).toBe(3);
+    expect(eps.level).toBeLessThan(1.5);
+    expect(lower.every((e) => e === eps || e.level > eps.level)).toBe(true);
+  });
+
+  it('fills the league with the named clubs, Kasiysi Rovers always among them', () => {
+    for (const [humans, seed] of [[2, 1], [4, 2], [6, 3]]) {
+      const s = newGame(humans, seed);
+      const names = s.clubs.filter((c) => !c.human).map((c) => c.name);
+      expect(names).toHaveLength(10 - humans);
+      expect(names).toContain('Kasiysi Rovers');
+      expect(new Set(names).size).toBe(names.length);
+      expect(names.every((n) => AI_CLUB_NAMES.includes(n))).toBe(true);
     }
   });
 
   it('gives clubs without a European tie that week their fitness back', () => {
     let s = newGame(2, 6);
-    while (s.results?.kind !== 'euro') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.results?.kind !== 'euro'));
     expect(s.round).toBe(EURO_AFTER[0] + 1);
     for (const id of s.humans) expect(s.clubs[id].squad.every((p) => p.fitness === 9)).toBe(true);
   });
@@ -631,7 +685,7 @@ describe('ending the game', () => {
   it('goes on for as long as the managers want and is decided by cash plus squad value', () => {
     let s = newGame(2, 8);
     for (const id of s.humans) s.clubs[id].cash = 5000;
-    while (s.phase !== 'seasonEnd') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'seasonEnd'));
     expect(reduce(s, { type: 'CONTINUE' }).season).toBe(2);
     expect(reduce(s, { type: 'ROLL' })).toBe(s);
 
@@ -666,7 +720,7 @@ describe('full game', () => {
     const first = s.euro.flatMap((comp) => comp.rounds[0].flatMap((t) => [t.a.clubId, t.b.clubId])).filter((id) => id !== null);
     expect(first).toHaveLength(4);
     expect(first.every((id) => !s.clubs[id].human)).toBe(true);
-    while (s.phase !== 'seasonEnd') s = reduce(s, bot(s));
+    s = until(s, (s) => !(s.phase !== 'seasonEnd'));
     const top = s.seasonSummary!.map((row) => row.id);
     const cashBefore = s.clubs[top[0]].cash;
     s = reduce(s, { type: 'CONTINUE' });

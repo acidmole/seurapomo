@@ -326,6 +326,7 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .seat.active { background: #17231b; border-color: #17231b; color: var(--cream); }
 .robot { padding: 2px 6px; background: var(--accent); color: #17231b; font: 700 12px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; }
 .thinking { font-style: italic; }
+.legend { margin-left: 6px; vertical-align: middle; }
 
 /* Side by side, the team sheet is as tall as the window and scrolls inside, so the board stays put. */
 @media (min-width: 1100px) {

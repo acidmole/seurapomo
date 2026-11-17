@@ -1,5 +1,5 @@
 import {
-  AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, fmt,
+  AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LEGEND, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, WEAKEST_CLUB, fmt,
   type Card, type FormationId, type Pos, type Shape,
 } from './data';
 
@@ -48,6 +48,8 @@ export interface Player {
   spirit: number;
   /** Temporary form from a card: added to skill for `matches` more league rounds, or all season when null. */
   form?: { amount: number; matches: number | null };
+  /** The legend: his value and wages are a fraction of what his skill would normally cost. */
+  legend?: boolean;
   /** The manager has told him to sit out this week's match. */
   resting?: boolean;
   /** League matches the player still misses. */
@@ -121,7 +123,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 23;
+export const STATE_VERSION = 25;
 
 export interface GameState {
   version: number;
@@ -144,6 +146,8 @@ export interface GameState {
    */
   qualified: number[][];
   euro: EuroComp[];
+  /** True once a manager has signed the legend; his card then stays out of the deck. */
+  legendSigned: boolean;
   /** Piles of name indexes still to be used. */
   names: { first: number[]; last: number[]; foreign: number[] };
   /** Indexes into CARDS still to be drawn; reshuffled when it runs out. */
@@ -224,13 +228,18 @@ export function level(p: Player): number {
   const tired = (p.fitness <= TIRED_AT ? 1 : 0) + (p.fitness <= 1 ? 1 : 0);
   return Math.max(1, Math.min(MAX_LEVEL, p.skill + (p.form?.amount ?? 0) - tired));
 }
-export const sellPrice = (p: Player) => Math.round(playerValue(p.skill, p.spirit) * SELL_RATE);
+/** What a player is worth: by skill and sisu, except that the legend comes at a discount. */
+export function valueOf(p: Player): number {
+  const full = playerValue(p.skill, p.spirit);
+  return p.legend ? Math.round((full * LEGEND.discount) / 5) * 5 : full;
+}
+export const sellPrice = (p: Player) => Math.round(valueOf(p) * SELL_RATE);
 export const trainingCost = (p: Player) => 5 * p.skill;
 /** Paid at the start of every turn, per level of skill in the squad. */
 export const WAGE_PER_LEVEL = 0.27;
 /** Paid each time a manager completes a lap of the board. */
 export const LAP_BONUS = 25;
-export const wages = (c: Club) => Math.round(WAGE_PER_LEVEL * c.squad.reduce((sum, p) => sum + p.skill, 0));
+export const wages = (c: Club) => Math.round(WAGE_PER_LEVEL * c.squad.reduce((sum, p) => sum + p.skill * (p.legend ? LEGEND.discount : 1), 0));
 
 /** Draws from a shuffled pile of the list, so a name does not come round again until the pile is used up. */
 function drawName(s: GameState, key: 'first' | 'last' | 'foreign', list: string[]): string {
@@ -259,7 +268,14 @@ const randomPos = (s: GameState): Pos => pick(s, ['MV', 'PU', 'PU', 'PU', 'KK', 
 function newSquad(s: GameState, offset: number): Player[] {
   const skills = shuffle(s, [6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3]);
   const positions: Pos[] = ['MV', 'MV', 'PU', 'PU', 'PU', 'PU', 'PU', 'KK', 'KK', 'KK', 'KK', 'HY', 'HY', 'HY'];
-  return positions.map((pos, i) => newPlayer(s, pos, skills[i] + offset));
+  // No two players in a squad share a first name or a surname, so nobody is mistaken for a team-mate.
+  const taken = new Set<string>();
+  return positions.map((pos, i) => {
+    const player = newPlayer(s, pos, skills[i] + offset);
+    for (let tries = 0; tries < 20 && player.name.split(' ').some((part) => taken.has(part)); tries++) player.name = newName(s);
+    for (const part of player.name.split(' ')) taken.add(part);
+    return player;
+  });
 }
 
 export interface Slot { pos: Pos; player: Player | null; eff: number }
@@ -537,8 +553,9 @@ function startSeason(s: GameState) {
   const lowerCount = CUP_SIZE - cupEntrants.length;
   for (let i = 0; i < lowerCount; i++) {
     const division = i < lowerCount / 2 ? 2 : 3;
-    const [min, max] = LOWER_LEVELS[division];
-    cupEntrants.push({ clubId: null, name: lowerNames.pop()!, level: min + rand(s) * (max - min), division });
+    const weakest = i === lowerCount - 1;
+    const [min, max] = weakest ? WEAKEST_CLUB.level : LOWER_LEVELS[division];
+    cupEntrants.push({ clubId: null, name: weakest ? WEAKEST_CLUB.name : lowerNames.pop()!, level: min + rand(s) * (max - min), division });
   }
   s.cup = [makeTies(shuffle(s, cupEntrants))];
   const foreign = shuffle(s, [...FOREIGN_CLUBS]);
@@ -562,16 +579,17 @@ export function createGame(config: GameConfig): GameState {
   const s: GameState = {
     version: STATE_VERSION,
     seed: config.seed | 0, nextId: 1, clubs: [], humans: [], bankrupt: [], order: [], season: 1, round: 0,
-    schedule: [], cup: [], qualified: [], euro: [], names: { first: [], last: [], foreign: [] }, deck: [], phase: 'roll', die: null, pending: null, notice: null, calendar: [], week: 0, results: null,
+    schedule: [], cup: [], qualified: [], euro: [], legendSigned: false, names: { first: [], last: [], foreign: [] }, deck: [], phase: 'roll', die: null, pending: null, notice: null, calendar: [], week: 0, results: null,
     seasonSummary: null, log: [],
   };
   const aiOffsets = [1, 0, 1, 0, -1, 0, 1, -1];
+  const aiNames = [AI_CLUB_NAMES[0], ...shuffle(s, AI_CLUB_NAMES.slice(1))];
   for (let i = 0; i < LEAGUE_SIZE; i++) {
     const human = config.clubs[i];
     const ai = i - config.clubs.length;
     s.clubs.push({
       id: i,
-      name: human ? human.name : AI_CLUB_NAMES[ai],
+      name: human ? human.name : aiNames[ai],
       human: !!human,
       ...(human?.computer ? { auto: true } : {}),
       color: human ? human.color : '#7b8794',
@@ -618,7 +636,7 @@ function startAuction(
 ) {
   const from = Math.max(0, s.humans.indexOf(starter));
   const active = s.humans.map((_, i) => s.humans[(from + i) % s.humans.length]).filter((id) => id !== barred);
-  s.pending = { kind: 'auction', player, minBid: Math.round(playerValue(player.skill, player.spirit) / 10) * 5, bid: 0, leader: null, active, idx: 0, subsidy, owner };
+  s.pending = { kind: 'auction', player, minBid: Math.round(valueOf(player) / 10) * 5, bid: 0, leader: null, active, idx: 0, subsidy, owner };
 }
 
 const bestPlayer = (c: Club) => [...c.squad].sort((a, b) => b.skill - a.skill || b.spirit - a.spirit)[0] as Player | undefined;
@@ -643,7 +661,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
       if (c.squad.length <= MIN_SQUAD) {
         lines.push('Joukkueessa on kuitenkin niin vähän pelaajia, että hän suostuu jäämään.');
       } else if (target) {
-        const fee = playerValue(target.skill, target.spirit);
+        const fee = valueOf(target);
         c.squad.splice(c.squad.indexOf(target), 1);
         c.cash += fee;
         lines.push(`Saat hänestä täyden hinnan, ${fmt(fee)}.`);
@@ -657,7 +675,7 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
         lines.push(`${victim.name} on sarjan parhaiten sijoittunut manageriseura, mutta kauppaa ei synny.`);
         break;
       }
-      const fee = Math.round(playerValue(star.skill, star.spirit) / 2);
+      const fee = Math.round(valueOf(star) / 2);
       victim.squad.splice(victim.squad.indexOf(star), 1);
       victim.cash += fee;
       lines.push(`${victim.name} menettää parhaan pelaajansa: ${star.name} lähtee, ja seura saa vain puolet hänen arvostaan, ${fmt(fee)}.`);
@@ -692,6 +710,15 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
       const p = newPlayer(s, randomPos(s), 2 + randInt(s, 7));
       c.squad.push(p);
       lines.push(`Joukkueeseen liittyy ${p.name} (${POS_NAME[p.pos]}, taito ${p.skill}).`);
+      break;
+    }
+    case 'legend': {
+      if (s.legendSigned) {
+        lines.push('Hän on kuitenkin jo löytänyt seuran.');
+        break;
+      }
+      const leo: Player = { ...newPlayer(s, LEGEND.pos, LEGEND.skill), name: LEGEND.name, spirit: LEGEND.spirit, legend: true };
+      startAuction(s, leo, c.id, null);
       break;
     }
     case 'renegotiate': {
@@ -781,8 +808,11 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]) {
 }
 
 function drawCard(s: GameState): Card {
-  if (!s.deck.length) s.deck = shuffle(s, CARDS.map((_, i) => i));
-  return CARDS[s.deck.pop()!];
+  for (;;) {
+    if (!s.deck.length) s.deck = shuffle(s, CARDS.map((_, i) => i));
+    const card = CARDS[s.deck.pop()!];
+    if (card.kind !== 'legend' || !s.legendSigned) return card;
+  }
 }
 
 /** Resolves the square the club stands on. */
@@ -877,6 +907,7 @@ function settleAuction(s: GameState) {
     const winner = club(s, a.leader);
     const sponsored = a.subsidy?.club === winner.id ? Math.min(a.subsidy.amount, a.bid) : 0;
     winner.cash -= a.bid - sponsored;
+    if (a.player.legend) s.legendSigned = true;
     if (a.owner === null) {
       winner.squad.push(a.player);
     } else if (a.owner !== winner.id) {
@@ -1067,7 +1098,7 @@ function nextSeason(s: GameState) {
   startSeason(s);
 }
 
-export const squadValue = (c: Club) => c.squad.reduce((sum, p) => sum + playerValue(p.skill, p.spirit), 0);
+export const squadValue = (c: Club) => c.squad.reduce((sum, p) => sum + valueOf(p), 0);
 /** What decides the game when the managers choose to count up: cash plus the value of the squad. */
 export const wealth = (c: Club) => c.cash + squadValue(c);
 
@@ -1140,10 +1171,10 @@ export function reduce(state: GameState, action: Action): GameState {
     case 'SCOUT_BUY': {
       if (p?.kind !== 'scout') return state;
       const player = p.options[action.index];
-      if (!player || me.cash < playerValue(player.skill, player.spirit) || me.squad.length >= MAX_SQUAD) return state;
-      me.cash -= playerValue(player.skill, player.spirit);
+      if (!player || me.cash < valueOf(player) || me.squad.length >= MAX_SQUAD) return state;
+      me.cash -= valueOf(player);
       me.squad.push(player);
-      const line = `Ostat pelaajan ${player.name} (${POS_NAME[player.pos]}, taso ${player.skill}) hintaan ${fmt(playerValue(player.skill, player.spirit))}.`;
+      const line = `Ostat pelaajan ${player.name} (${POS_NAME[player.pos]}, taso ${player.skill}) hintaan ${fmt(valueOf(player))}.`;
       s.notice!.lines.push(line);
       log(s, `${me.name}: ${line}`);
       s.pending = null;
