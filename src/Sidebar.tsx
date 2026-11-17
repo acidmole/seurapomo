@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
-  CUP_AFTER, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
-  EURO_AFTER, FULL_TIME, REST_RECOVERY, cupGate, euroGate, LOAN_INTEREST, LOAN_STEP, MATCH_BONUS_COST, loanInterest, loanRoom, EXHAUSTED_AT, plays, posBadge, posName, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Player, type Tie,
+  CUP_AFTER, LEAGUE_SIZE, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
+  EURO_AFTER, FULL_TIME, GOLDEN_BOOT_PRIZE, REST_RECOVERY, topScorers, cupGate, euroGate, LOAN_STEP, lumpInterest, MATCH_BONUS_COST, loanInterest, loanRoom, EXHAUSTED_AT, plays, posBadge, posName, MIN_SQUAD, TIRED_AT, winStreak, actingClubId, entrantName, level, thisWeek, wealth, type Action, type Club, type Entrant, type EuroComp, type Fixture, type GameState, type MatchEvent, type Player, type Tie,
 } from './game/engine';
 
 type Dispatch = (action: Action) => void;
@@ -42,6 +42,48 @@ export function Standings({ game }: { game: GameState }) {
   );
 }
 
+const clock = (minute: number) => (minute > FULL_TIME ? `90+${minute - FULL_TIME}'` : `${minute}'`);
+const surname = (name: string) => name.split(' ').pop()!;
+
+/** The scorers of a match under its score, each side's under its own name: "81' Kaukomies". */
+function Scorers({ events, minute }: { events: MatchEvent[] | undefined; minute?: number }) {
+  const goals = (events ?? []).filter((e) => e.goal && e.scorer && (minute === undefined || e.minute <= minute));
+  if (!goals.length) return null;
+  const side = (n: 0 | 1) => goals.filter((e) => e.side === n).map((e, i) => <span key={i}>{clock(e.minute)} {surname(e.scorer!)}</span>);
+  return (
+    <>
+      <span className="scorers right small">{side(0)}</span>
+      <span />
+      <span className="scorers small">{side(1)}</span>
+    </>
+  );
+}
+
+/** The race for the golden boot: the league's ten best scorers. */
+export function TopScorers({ game }: { game: GameState }) {
+  const list = topScorers(game).slice(0, 10);
+  return (
+    <>
+      <h3>Maalintekijät</h3>
+      {list.length === 0 ? <p className="muted small">Sarjassa ei ole vielä tehty maaleja.</p> : (
+        <table className="table">
+          <tbody>
+            {list.map(({ player, clubId }, i) => (
+              <tr key={player.id}>
+                <td>{i + 1}</td>
+                <td className="left">{player.name}</td>
+                <td className="left"><ClubName game={game} id={clubId} /></td>
+                <td><strong>{player.goals}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="muted small">Kauden paras maalintekijä saa Kultaisen kengän, ja hänen seuransa {fmt(GOLDEN_BOOT_PRIZE)}. Vain sarjaottelujen maalit lasketaan.</p>
+    </>
+  );
+}
+
 /** The side that scored in stoppage time, if any: 0, 1, or both. */
 const lateGoals = (events: MatchEvent[] | undefined) => (events ?? []).filter((e) => e.goal && e.minute > FULL_TIME).map((e) => e.side);
 
@@ -69,6 +111,7 @@ export function FixtureList({ game, fixtures, minute }: { game: GameState; fixtu
             <span className="right"><ClubName game={game} id={f.home} /></span>
             <span className="score">{live ? `${live.goals[0]}–${live.goals[1]}` : f.hg === null ? '–' : `${f.hg}–${f.ag}`}</span>
             <span><ClubName game={game} id={f.away} /></span>
+            <Scorers events={f.events} minute={minute} />
             {chances && (
               <span className="chances muted small">
                 Maalipaikat {chances[0]}–{chances[1]}
@@ -110,6 +153,7 @@ export function Ties({ game, ties, minute }: { game: GameState; ties: Tie[]; min
             <span className={`right ${!live && t.winner === 'a' ? 'winner' : ''}`}><EntrantName game={game} entrant={t.a} /></span>
             <span className="score">{live ? `${live.goals[0]}–${live.goals[1]}` : t.ag === null ? '–' : `${t.ag}–${t.bg}`}</span>
             <span className={!live && t.winner === 'b' ? 'winner' : ''}><EntrantName game={game} entrant={t.b} /></span>
+            <Scorers events={t.events} minute={minute} />
             {!live && t.pens && <span className="chances muted small">Ratkesi rangaistuspotkuilla</span>}
             {!live && lateGoals(t.events).map((side, n) => (
               <span key={n} className="chances muted small"><strong>Lisäajan maali: {entrantName(game, side === 0 ? t.a : t.b)}</strong></span>
@@ -225,10 +269,10 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
               <button
                 className="tiny"
                 disabled={loanRoom(club) < LOAN_STEP}
-                title={`Pankki perii lainasta korkoa ${Math.round(LOAN_INTEREST * 100)} % viikossa`}
+                title={`Tämän lainaerän korko on ${fmt(lumpInterest(club.loan / LOAN_STEP))} viikossa. Jokainen uusi erä on edellistä kalliimpi.`}
                 onClick={() => dispatch({ type: 'BORROW' })}
               >
-                Ota lainaa {fmt(LOAN_STEP)}
+                Ota lainaa {fmt(LOAN_STEP)} (korko +{fmt(lumpInterest(club.loan / LOAN_STEP))} / vko)
               </button>
               {club.loan > 0 && (
                 <button
@@ -275,7 +319,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         ) : nextHome && club.boycott
           ? <span className="neg">Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}), mutta kannattajat boikotoivat sitä: lipputuloja ei kerry.</span>
         : nextHome
-          ? <>{club.sellout && <span className="pos">Loppuunmyyty: lipputulot kaksinkertaiset. </span>}Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak) * (club.sellout ? 2 : 1))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}.</>
+          ? <>{club.sellout && <span className="pos">Loppuunmyyty: lipputulot kaksinkertaiset. </span>}Seuraava ottelu pelataan kotona ({game.clubs[nextHome.away].name}). Lipputuloja kertyy {fmt(gateIncome(position(game, viewId), position(game, nextHome.away), streak) * (club.sellout ? 2 : 1))}{streak > 0 ? ` (voittoputki ${streak} tuo lisää katsojia)` : ''}. Vastustaja on sarjassa {position(game, nextHome.away)}., mikä tuo summasta {fmt(2 * (LEAGUE_SIZE - position(game, nextHome.away)))}.</>
           : <span className="muted">Seuraava ottelu pelataan vieraissa, joten lipputuloja ei kerry.</span>}
       </p>
 
@@ -386,7 +430,7 @@ export default function Sidebar({ game, dispatch }: { game: GameState; dispatch:
       </nav>
       <div className="tab-body">
         {tab === 'squad' && <Squad game={game} dispatch={dispatch} />}
-        {tab === 'table' && <Standings game={game} />}
+        {tab === 'table' && <><Standings game={game} /><TopScorers game={game} /></>}
         {tab === 'fixtures' && (
           <>
             <h3>Kierros {round + 1}</h3>

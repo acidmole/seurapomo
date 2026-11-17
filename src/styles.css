@@ -178,6 +178,9 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 }
 .turn-heading { display: flex; align-items: center; gap: 12px; }
 .turn-heading .display { font-size: 30px; }
+.fuse { height: 6px; margin-top: 8px; background: color-mix(in srgb, currentColor 15%, transparent); overflow: hidden; }
+.fuse-burn { height: 100%; width: 100%; transform-origin: left; background: linear-gradient(90deg, #f2c14e 0, #f2c14e calc(100% - 10px), #ff6b2c 100%); animation: fuse-burn linear forwards; }
+@keyframes fuse-burn { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .cash { font: 700 30px/1 var(--display); color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cash.neg { color: var(--bad); }
 .center-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; padding-top: 14px; border-top: 2px solid var(--line); }
@@ -187,13 +190,21 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .notice { display: grid; gap: 8px; }
 .notice-head { display: flex; align-items: center; gap: 14px; }
 .notice-head .display { font-size: 22px; }
+.upkeep { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent); opacity: 0.75; }
+.outcome { display: grid; gap: 6px; padding: 10px 12px; border-left: 4px solid #f2c14e; background: color-mix(in srgb, currentColor 8%, transparent); }
+.outcome.crisis { border-left-color: #e0564a; }
+.outcome.lucky { border-left-color: #4fbf6b; }
+.outcome p { margin: 0; }
 .mark { display: inline-block; margin-left: 10px; padding: 3px 8px; color: #fff; font: 700 13px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; vertical-align: middle; }
 .mark.crisis { background: #a3261d; }
 .mark.lucky { background: #1f7a3a; }
 .die { flex: none; width: 48px; height: 48px; padding: 8px; border-radius: 8px; background: var(--cream); display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); place-items: center; }
 .die .pip { width: 8px; height: 8px; border-radius: 50%; background: #17231b; }
 .die-tumbling { width: 72px; height: 72px; padding: 12px; border-radius: 12px; box-shadow: 4px 4px 0 var(--shadow); animation: die-tumble 0.3s linear infinite; }
-.die-tumbling .pip { width: 12px; height: 12px; }
+.die-tumbling .pip, .die-big .pip { width: 12px; height: 12px; }
+.die-big { width: 72px; height: 72px; padding: 12px; border-radius: 12px; box-shadow: 4px 4px 0 var(--shadow); }
+.roll-outcome { display: grid; justify-items: center; gap: 10px; }
+.roll-outcome .display { font-size: 26px; }
 .die-landed { animation: die-land 0.35s ease-out; }
 @keyframes die-tumble {
   0% { transform: translate(-14px, 4px) rotate(-18deg); }
@@ -282,6 +293,8 @@ button.tiny { min-height: 28px; padding: 0 8px; font-size: 13px; white-space: no
 .fixture { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px 10px; align-items: center; padding: 6px 8px; background: var(--well); }
 .fixture .score { min-width: 48px; text-align: center; font: 700 20px/1 var(--display); font-variant-numeric: tabular-nums; }
 .fixture .chances { grid-column: 1 / -1; text-align: center; }
+.fixture .scorers { display: flex; flex-wrap: wrap; gap: 0 10px; opacity: 0.85; }
+.fixture .scorers.right { justify-content: flex-end; }
 .fixture .winner .club { font-weight: 700; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .gates { display: flex; flex-wrap: wrap; gap: 6px 18px; }
 

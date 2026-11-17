@@ -1,6 +1,6 @@
 import { FORMATIONS, type FormationId } from './data';
 import {
-  LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, expectedChances, isBroke, lineup,
+  LOAN_STEP, MATCH_BONUS_COST, MAX_SPIRIT, MENTAL_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, expectedChances, isBroke, lineup,
   loanInterest, loanRoom, mustSell, plays, valueOf, reduce, scoringOdds, sellPrice, thisWeek, trainingCost, wages,
   type Action, type Club, type GameState, type Player,
 } from './engine';
@@ -116,6 +116,14 @@ export function botAction(s: GameState): Action {
       .filter((x) => x.skill < MAX_LEVEL && (p.free || trainingCost(x) <= spare(me)))
       .sort((a, b) => b.skill - a.skill)[0];
     return pupil ? { type: 'TRAIN', playerId: pupil.id } : { type: 'SKIP' };
+  }
+  if (p?.kind === 'mental') {
+    // Sisu counts as the starters' average, so the session goes to the starter most sure of keeping his place.
+    const pupil = lineup(me).slots
+      .flatMap((x) => (x.player ? [x.player] : []))
+      .filter((x) => x.spirit < MAX_SPIRIT)
+      .sort((a, b) => b.skill - a.skill)[0];
+    return pupil && spare(me) >= MENTAL_COST ? { type: 'COACH', playerId: pupil.id } : { type: 'SKIP' };
   }
   // Money in the bank, except before a knockout tie, where one match decides everything.
   if (p?.kind === 'windfall') return { type: 'WINDFALL', keep: !(hasTie(s, me) && me.morale < 1) };

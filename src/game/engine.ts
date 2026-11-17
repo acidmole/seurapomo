@@ -25,11 +25,15 @@ export const MATCH_BONUS_COST = 15;
 /** Extra ticket income per league win in a row, up to five. */
 export const STREAK_GATE = 5;
 export const SELL_RATE = 0.6;
+/** Which line a goal comes from: defenders, midfielders, forwards. Keepers do not score. */
+export const SCORER_SHARE: Record<Pos, number> = { MV: 0, PU: 0.2, KK: 0.35, HY: 0.45 };
+/** Paid at the end of the season to the club of the league's top scorer. */
+export const GOLDEN_BOOT_PRIZE = 50;
 /** The bank lends in lumps of this size, up to LOAN_MAX in all. */
 export const LOAN_STEP = 25;
-export const LOAN_MAX = 100;
-/** Interest on a bank loan, charged every week along with the wages. */
-export const LOAN_INTEREST = 0.04;
+/** Weekly interest on each lump in the order they are borrowed: every further lump costs more than the last. */
+export const LUMP_INTEREST = [1, 1, 2, 3, 5, 8, 13];
+export const LOAN_MAX = LOAN_STEP * LUMP_INTEREST.length;
 export const MAX_LEVEL = 9;
 export const FULL_FITNESS = 9;
 /** The fitness a new player arrives with, and everyone starts a season with. */
@@ -70,6 +74,8 @@ export interface Player {
   resting?: boolean;
   /** He has started a match this week, so the week brings him no recovery. */
   played?: boolean;
+  /** League goals this season. Cup and European goals do not count towards the golden boot. */
+  goals?: number;
   /** League matches the player still misses. */
   out: number;
   outReason?: 'injury' | 'ban';
@@ -146,6 +152,8 @@ export type Pending =
   | { kind: 'steal' }
   | { kind: 'scout'; options: Player[] }
   | { kind: 'training'; free: boolean }
+  /** The manager may send one player to the mental coach. */
+  | { kind: 'mental' }
   /** A crisis the manager can buy his way out of. */
   | { kind: 'crisis'; cost: number }
   /** Money on offer: the manager banks it or passes it on to the players. */
@@ -158,7 +166,7 @@ export type Phase = 'roll' | 'manage' | 'matchday' | 'seasonEnd' | 'gameOver';
 export interface SeasonRow { id: number; pos: number; prize: number }
 
 /** Raised whenever the shape of a saved game changes, so an older game is never played with newer rules. */
-export const STATE_VERSION = 29;
+export const STATE_VERSION = 32;
 
 export interface GameState {
   version: number;
@@ -190,7 +198,15 @@ export interface GameState {
   phase: Phase;
   die: number | null;
   pending: Pending | null;
-  notice: { square: number; lines: string[]; /** The card drawn was a crisis or a stroke of luck. */ mark?: Mark } | null;
+  notice: {
+    square: number;
+    /** The bookkeeping at the start of the turn: wages, loan interest, the lap bonus. */
+    upkeep: string[];
+    /** What the square, or the card drawn on it, brought. */
+    lines: string[];
+    /** The card drawn was a crisis or a stroke of luck. */
+    mark?: Mark;
+  } | null;
   /** The season week by week: league rounds, with cup and European rounds on weeks of their own in between. */
   calendar: Week[];
   /** Index into `calendar` of the week being played. */
@@ -198,6 +214,8 @@ export interface GameState {
   /** What was just played, while its results are on screen. */
   results: Week | null;
   seasonSummary: SeasonRow[] | null;
+  /** The league's top scorer of the season just ended, while its summary is on screen. */
+  goldenBoot: { name: string; clubId: number; goals: number } | null;
   log: string[];
 }
 
@@ -208,6 +226,8 @@ export type Action =
   | { type: 'PASS' }
   | { type: 'SCOUT_BUY'; index: number }
   | { type: 'TRAIN'; playerId: number }
+  /** Send a player to the mental coach. */
+  | { type: 'COACH'; playerId: number }
   | { type: 'SKIP' }
   /** Answer a crisis: pay up, or take the bad morale. */
   | { type: 'CRISIS'; pay: boolean }
@@ -289,6 +309,9 @@ export function valueOf(p: Player): number {
 }
 export const sellPrice = (p: Player) => Math.round(valueOf(p) * SELL_RATE);
 export const trainingCost = (p: Player) => 5 * p.skill;
+/** A session with the mental coach raises one player's sisu by one, for far less than a training camp. */
+export const MENTAL_COST = 10;
+export const MAX_SPIRIT = 9;
 /** Paid at the start of every turn, per level of skill in the squad. */
 export const WAGE_PER_LEVEL = 0.27;
 /** Paid each time a manager completes a lap of the board. */
@@ -467,7 +490,7 @@ export const TEMPO_CHANCES = 0.5;
 /** Chances won per midfielder more than the opponent has. */
 export const MIDFIELD_COUNT_CHANCES = 0.6;
 /** Chances won or lost per point of average sisu above or below 5, when the side is in a tough spot. */
-export const SPIRIT_CHANCES = 0.3;
+export const SPIRIT_CHANCES = 0.6;
 
 /**
  * Sisu only counts in a tough spot: playing away, in a knockout tie, or as the weaker side on paper.
@@ -524,7 +547,7 @@ export function expectedChances(x: Strength, y: Strength, bonus = 0): number {
  * One scoring chance: when it came, which side had it (0 = first-named side) and whether it went in.
  * Minutes 91–95 are stoppage time.
  */
-export interface MatchEvent { minute: number; side: 0 | 1; goal: boolean }
+export interface MatchEvent { minute: number; side: 0 | 1; goal: boolean; /** Who scored, when the goal was a league club's. */ scorer?: string }
 export const FULL_TIME = 90;
 export const STOPPAGE = 5;
 
@@ -552,6 +575,34 @@ function playMatch(s: GameState, a: Strength, b: Strength, aBonus = 0, bBonus = 
     // The two sides' chances interleaved in the order they happened.
     events: [...x, ...y].sort((p, q) => p.minute - q.minute),
   };
+}
+
+/**
+ * Names the scorer of each goal a league club scored. First the line the goal came from is drawn, by
+ * SCORER_SHARE; then the man within that line, in proportion to the level he is playing at. In the league
+ * the goal goes on his tally for the golden boot.
+ */
+function creditScorers(s: GameState, events: MatchEvent[], sides: [Strength, Strength], league: boolean) {
+  for (const e of events) {
+    const slots = (sides[e.side] as Partial<Lineup>).slots?.filter((x) => x.player && SCORER_SHARE[x.pos] > 0);
+    if (!e.goal || !slots?.length) continue;
+    const lines = (['PU', 'KK', 'HY'] as Pos[]).filter((pos) => slots.some((x) => x.pos === pos));
+    let roll = rand(s) * lines.reduce((sum, pos) => sum + SCORER_SHARE[pos], 0);
+    const line = lines.find((pos) => (roll -= SCORER_SHARE[pos]) < 0) ?? lines[lines.length - 1];
+    const men = slots.filter((x) => x.pos === line);
+    roll = rand(s) * men.reduce((sum, x) => sum + x.eff, 0);
+    const scorer = (men.find((x) => (roll -= x.eff) < 0) ?? men[men.length - 1]).player!;
+    e.scorer = scorer.name;
+    if (league) scorer.goals = (scorer.goals ?? 0) + 1;
+  }
+}
+
+/** The league's scorers this season, best first; level on goals, the one whose club stands higher comes first. */
+export function topScorers(s: GameState): { player: Player; clubId: number }[] {
+  const order = table(s).map((r) => r.id);
+  return s.clubs
+    .flatMap((c) => c.squad.filter((p) => p.goals).map((player) => ({ player, clubId: c.id })))
+    .sort((a, b) => b.player.goals! - a.player.goals! || order.indexOf(a.clubId) - order.indexOf(b.clubId) || a.player.id - b.player.id);
 }
 
 /** Ticket income for a home match. Meetings of teams high in the table draw bigger crowds. */
@@ -610,7 +661,10 @@ function startRound(s: GameState) {
 export const mustSell = (c: Club) => c.human && c.cash < 0;
 /** How much more the bank is willing to lend. */
 export const loanRoom = (c: Club) => Math.max(0, LOAN_MAX - c.loan);
-export const loanInterest = (c: Club) => Math.round(c.loan * LOAN_INTEREST);
+/** Weekly interest on the lump borrowed after `lumps` others. */
+export const lumpInterest = (lumps: number) => LUMP_INTEREST[lumps] ?? 0;
+/** Weekly interest on the whole loan, charged along with the wages. */
+export const loanInterest = (c: Club) => LUMP_INTEREST.slice(0, Math.ceil(c.loan / LOAN_STEP)).reduce((sum, x) => sum + x, 0);
 /** With only eleven players left there is nothing to sell, and the bank's money no longer covers the debt. */
 export const isBroke = (c: Club) => mustSell(c) && c.squad.length <= MIN_SQUAD && c.cash + loanRoom(c) < 0;
 function log(s: GameState, line: string) {
@@ -649,6 +703,7 @@ function startSeason(s: GameState) {
   s.notice = null;
   s.results = null;
   s.seasonSummary = null;
+  s.goldenBoot = null;
   log(s, `Kausi ${s.season} alkaa.`);
   s.qualified.forEach((ids, tier) => {
     for (const id of ids) {
@@ -664,7 +719,7 @@ export function createGame(config: GameConfig): GameState {
     version: STATE_VERSION,
     seed: config.seed | 0, nextId: 1, clubs: [], humans: [], bankrupt: [], order: [], season: 1, round: 0,
     schedule: [], cup: [], qualified: [], euro: [], legendSigned: false, names: { first: [], last: [], foreign: [] }, deck: [], phase: 'roll', die: null, pending: null, notice: null, calendar: [], week: 0, results: null,
-    seasonSummary: null, log: [],
+    seasonSummary: null, goldenBoot: null, log: [],
   };
   const aiOffsets = [1, 0, 1, 0, -1, 0, 1, -1];
   const aiNames = [AI_CLUB_NAMES[0], ...shuffle(s, AI_CLUB_NAMES.slice(1))];
@@ -961,6 +1016,9 @@ function landOn(s: GameState, c: Club, lines: string[]): Mark | undefined {
       break;
     case 'press':
       return playCard(s, c, drawCard(s), lines);
+    case 'mental':
+      s.pending = { kind: 'mental' };
+      break;
     case 'training':
       s.pending = { kind: 'training', free: false };
       break;
@@ -974,24 +1032,25 @@ function landOn(s: GameState, c: Club, lines: string[]): Mark | undefined {
   return undefined;
 }
 
-function finishLanding(s: GameState, c: Club, lines: string[], mark?: Mark) {
+function finishLanding(s: GameState, c: Club, lines: string[], mark?: Mark, upkeep: string[] = []) {
   s.phase = 'manage';
-  s.notice = { square: c.boardPos, lines, ...(mark ? { mark } : {}) };
-  for (const line of lines) log(s, `${c.name}: ${line}`);
+  s.notice = { square: c.boardPos, upkeep, lines, ...(mark ? { mark } : {}) };
+  for (const line of [...upkeep, ...lines]) log(s, `${c.name}: ${line}`);
 }
 
 function roll(s: GameState) {
   const c = club(s, currentClubId(s));
   const die = 1 + randInt(s, 6);
+  const upkeep: string[] = [];
   const lines: string[] = [];
   s.die = die;
-  payWages(c, lines);
+  payWages(c, upkeep);
   if (c.boardPos + die >= BOARD.length) {
     c.cash += LAP_BONUS;
-    lines.push(`Kierros täynnä: saat kierrosbonuksen ${fmt(LAP_BONUS)}.`);
+    upkeep.push(`Kierros täynnä: saat kierrosbonuksen ${fmt(LAP_BONUS)}.`);
   }
   c.boardPos = (c.boardPos + die) % BOARD.length;
-  finishLanding(s, c, lines, landOn(s, c, lines));
+  finishLanding(s, c, lines, landOn(s, c, lines), upkeep);
 }
 
 /** Plays one specific card for the club whose turn it is, as if it had just been drawn. */
@@ -1102,6 +1161,7 @@ function playLeagueRound(s: GameState) {
       MORALE_CHANCES * away.morale + spiritBonus(a, h, true),
       !!home.surge, !!away.surge,
     );
+    creditScorers(s, played.events, [h, a], true);
     applyFatigue(home, h);
     applyFatigue(away, a);
     f.hg = played.ag;
@@ -1171,6 +1231,7 @@ function playTie(s: GameState, t: Tie, gate: number): Entrant {
     return bonus;
   };
   ({ ag: t.ag, bg: t.bg, events: t.events } = playMatch(s, a, b, spiritBonus(a, b, true) + mood(t.a), spiritBonus(b, a, true) + mood(t.b)));
+  creditScorers(s, t.events!, [a, b], false);
   t.pens = t.ag === t.bg;
   t.winner = t.ag > t.bg ? 'a' : t.bg > t.ag ? 'b' : rand(s) < shootoutOdds(a, b) ? 'a' : 'b';
   if (t.pens) {
@@ -1213,6 +1274,12 @@ function endSeason(s: GameState) {
   const ids = s.seasonSummary.map((row) => row.id);
   s.qualified = [[ids[0]], [ids[1]], [ids[2], ids[3]]];
   log(s, `Kausi ${s.season} päättyy. Mestari on ${club(s, s.seasonSummary[0].id).name}.`);
+  const best = topScorers(s)[0];
+  if (best) {
+    s.goldenBoot = { name: best.player.name, clubId: best.clubId, goals: best.player.goals! };
+    club(s, best.clubId).cash += GOLDEN_BOOT_PRIZE;
+    log(s, `Kultainen kenkä: ${best.player.name} (${club(s, best.clubId).name}), ${best.player.goals} maalia. Seura saa ${fmt(GOLDEN_BOOT_PRIZE)}.`);
+  }
   s.phase = 'seasonEnd';
 }
 
@@ -1220,7 +1287,7 @@ function nextSeason(s: GameState) {
   s.season++;
   for (const c of s.clubs) {
     c.morale = 0;
-    for (const p of c.squad) { p.out = 0; p.fitness = START_FITNESS; delete p.outReason; delete p.form; }
+    for (const p of c.squad) { p.out = 0; p.fitness = START_FITNESS; delete p.outReason; delete p.form; delete p.goals; }
     if (!c.human) {
       for (let i = 0; i < 3; i++) {
         const p = pick(s, c.squad);
@@ -1330,6 +1397,19 @@ export function reduce(state: GameState, action: Action): GameState {
       return s;
     }
 
+    case 'COACH': {
+      if (p?.kind !== 'mental') return state;
+      const player = me.squad.find((x) => x.id === action.playerId);
+      if (!player || player.spirit >= MAX_SPIRIT || me.cash < MENTAL_COST) return state;
+      me.cash -= MENTAL_COST;
+      player.spirit++;
+      const line = `${player.name} käy henkisen valmentajan puheilla. Sisu nousee ${player.spirit}:een.`;
+      s.notice!.lines.push(line);
+      log(s, `${me.name}: ${line}`);
+      s.pending = null;
+      return s;
+    }
+
     case 'CRISIS': {
       if (p?.kind !== 'crisis' || (action.pay && me.cash < p.cost)) return state;
       if (action.pay) me.cash -= p.cost;
@@ -1357,7 +1437,7 @@ export function reduce(state: GameState, action: Action): GameState {
     }
 
     case 'SKIP':
-      if (p?.kind !== 'scout' && p?.kind !== 'training' && p?.kind !== 'steal') return state;
+      if (p?.kind !== 'scout' && p?.kind !== 'training' && p?.kind !== 'mental' && p?.kind !== 'steal') return state;
       s.pending = null;
       return s;
 

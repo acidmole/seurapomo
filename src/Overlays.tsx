@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { ClubName, EuroTies, FixtureList, Standings, Ties } from './Sidebar';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, fmt } from './game/data';
-import { FULL_TIME, STOPPAGE, squadValue, wealth, type GameState } from './game/engine';
+import { FULL_TIME, GOLDEN_BOOT_PRIZE, STOPPAGE, squadValue, wealth, type GameState } from './game/engine';
 
 function Overlay({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -63,9 +63,6 @@ export function MatchdayResults({ game, onContinue }: { game: GameState; onConti
         <button className="big" onClick={() => setMinute(LAST_MINUTE + 1)}>Näytä lopputulokset</button>
       ) : (
         <>
-          {r.kind !== 'league' && (
-            <p className="muted small">Joukkueet, joilla ei ollut ottelua tällä viikolla, lepäsivät: niiden pelaajien kunto palautui.</p>
-          )}
           {gates.length > 0 && (
             <>
               <h3>{r.kind === 'league' ? 'Kotiotteluiden lipputulot' : 'Lipputulot'}</h3>
@@ -137,6 +134,12 @@ export function SeasonEnd({ game, onContinue, onFinish }: { game: GameState; onC
           ))}
         </tbody>
       </table>
+      {game.goldenBoot && (
+        <p>
+          <strong>Kultainen kenkä:</strong> {game.goldenBoot.name} (<ClubName game={game} id={game.goldenBoot.clubId} />),{' '}
+          {game.goldenBoot.goals} maalia sarjassa. Seura saa {fmt(GOLDEN_BOOT_PRIZE)}.
+        </p>
+      )}
       <h3>Tilanne, jos pisteet lasketaan nyt</h3>
       <WealthTable game={game} />
       <p className="muted small">Voittaja on se, jolla on eniten rahaa, kun kassaan lisätään pelaajien arvo.</p>

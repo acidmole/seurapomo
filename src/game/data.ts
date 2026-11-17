@@ -30,6 +30,7 @@ export type SquareType =
   | 'scout'
   | 'academy'
   | 'training'
+  | 'mental'
   | 'sponsor'
   | 'press'
   | 'injury'
@@ -38,7 +39,7 @@ export type SquareType =
 
 export const BOARD: SquareType[] = [
   'start', 'sponsor', 'press', 'scout', 'training', 'auction',
-  'injury', 'press', 'academy', 'sponsor', 'press', 'training',
+  'injury', 'press', 'academy', 'sponsor', 'press', 'mental',
   'rest', 'scout', 'press', 'auction', 'tax', 'sponsor',
   'academy', 'training', 'press', 'injury', 'scout', 'press',
 ];
@@ -57,6 +58,7 @@ export const SQUARE_INFO: Record<SquareType, { name: string; icon: string; patte
   scout: { name: 'Kykyjen\u00adetsijä', pattern: STRIPES, icon: 'M17 11a6 6 0 1 1-12 0a6 6 0 0 1 12 0M20 20l-4.5-4.5', help: 'Saat ostaa yhden kolmesta pelaajasta listahintaan.' },
   academy: { name: 'Akatemia', pattern: HOOPS, icon: 'm12 3 2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 16.9 6.6 19.8l1.1-6.1L3.2 9.4l6.1-.8z', help: 'Saat nuoren pelaajan ilmaiseksi.' },
   training: { name: 'Harjoitus\u00adleiri', pattern: HOOPS, icon: 'M12 3 5 20h14zM8.5 12h7M4 20h16', help: 'Voit nostaa yhden pelaajan taitoa maksua vastaan.' },
+  mental: { name: 'Henkinen valmen\u00adtaja', pattern: HOOPS, icon: 'M12 20.5S4.5 16 4.5 10A4 4 0 0 1 12 8a4 4 0 0 1 7.5 2c0 6-7.5 10.5-7.5 10.5z', help: 'Voit nostaa yhden pelaajan sisua pientä maksua vastaan.' },
   sponsor: { name: 'Sponsori', pattern: HALVES, icon: 'M8 3 3 6l2 4 2-1v11h10V9l2 1 2-4-5-3a4 4 0 0 1-8 0z', help: 'Saat rahaa. Summa kasvaa sarjasijoituksen mukana.' },
   press: { name: 'Lehdistö', pattern: QUARTERS, icon: 'M3 5h18v14H3zM7 9h5v4H7zM15 9h2M15 13h2M7 16h10', help: 'Nostat kortin. Se voi tuoda tai viedä rahaa, muuttaa pelaajan virettä, käynnistää huutokaupan tai siirtää sinut toiseen ruutuun.' },
   injury: { name: 'Lääkäri', pattern: SASH, icon: 'M4 4h16v16H4zM12 8v8M8 12h8', help: 'Yksi avauskokoonpanon pelaaja loukkaantuu.' },

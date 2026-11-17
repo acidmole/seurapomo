@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { BOARD, SQUARE_INFO, fmt } from './game/data';
 import {
-  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, isBroke, mustSell, valueOf, trainingCost,
+  MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, actingClubId, currentClubId, isBroke, mustSell, reduce, valueOf, trainingCost, MAX_SPIRIT, MENTAL_COST,
   type Action, type GameState,
 } from './game/engine';
-import { Die, Icon, PlayerCard, ROLL_MS, TumblingDie, rattle } from './ui';
+import { botToMove } from './game/bot';
+import { Die, Fuse, Icon, LAND_MS, PlayerCard, ROLL_MS, TumblingDie, botPause, rattle } from './ui';
 
 type Dispatch = (action: Action) => void;
 
@@ -16,22 +17,35 @@ function cell(i: number): { gridRow: number; gridColumn: number } {
   return { gridRow: 25 - i, gridColumn: 1 };
 }
 
-/** The die rattles and tumbles for a moment before the roll is made. */
-function RollButton({ onRoll }: { onRoll: () => void }) {
-  const [rolling, setRolling] = useState(false);
+/**
+ * The die rattles and tumbles for a moment, lands on what was rolled and stays there long enough to be read,
+ * and only then is the roll made. `peek` tells what the roll will be.
+ */
+function RollButton({ onRoll, peek }: { onRoll: () => void; peek: () => number }) {
+  const [stage, setStage] = useState<'idle' | 'rolling' | 'landed'>('idle');
+  const [outcome, setOutcome] = useState(1);
   useEffect(() => {
-    if (!rolling) return;
-    const timer = setTimeout(onRoll, ROLL_MS);
+    if (stage === 'idle') return;
+    const timer = stage === 'rolling' ? setTimeout(() => setStage('landed'), ROLL_MS) : setTimeout(onRoll, LAND_MS);
     return () => clearTimeout(timer);
-    // Only the start of the roll matters; `onRoll` is a fresh function on every render.
+    // Only the change of stage matters; `onRoll` is a fresh function on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolling]);
+  }, [stage]);
 
-  if (rolling) return <TumblingDie />;
+  if (stage === 'rolling') return <TumblingDie />;
+  if (stage === 'landed') {
+    return (
+      <div className="roll-outcome" role="status">
+        <Die value={outcome} big />
+        <strong className="display">Heitit {outcome}</strong>
+      </div>
+    );
+  }
   const start = () => {
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return onRoll();
+    setOutcome(peek());
     rattle();
-    setRolling(true);
+    setStage('rolling');
   };
   return <button className="primary big" onClick={start}>Heitä noppaa</button>;
 }
@@ -71,7 +85,12 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const full = me.squad.length >= MAX_SQUAD;
   const square = game.notice ? SQUARE_INFO[BOARD[game.notice.square]] : null;
 
+  // Every move the computer makes gives a new game state, which starts the fuse afresh.
+  const moves = useRef({ game, n: 0 });
+  if (moves.current.game !== game) moves.current = { game, n: moves.current.n + 1 };
+
   const heading = (
+    <>
     <div className="turn-heading">
       <span className="dot big" style={{ background: me.color }} />
       <div>
@@ -81,6 +100,8 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
       <div className="spacer" />
       <div className={me.cash < 0 ? 'cash neg' : 'cash'}>{fmt(me.cash)}</div>
     </div>
+    {botToMove(game) && <Fuse key={moves.current.n} ms={botPause(game)} />}
+    </>
   );
 
   const thinking = <p className="muted thinking">{game.clubs[actingClubId(game)].name} on tietokoneen ohjaama. Se miettii siirtoaan…</p>;
@@ -92,7 +113,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         {heading}
         <div className="center-body centered">
           <p className="muted">Voit vaihtaa muodostelmaa tai myydä pelaajia oikealta ennen heittoa.</p>
-          <RollButton onRoll={() => dispatch({ type: 'ROLL' })} />
+          <RollButton onRoll={() => dispatch({ type: 'ROLL' })} peek={() => reduce(game, { type: 'ROLL' }).die ?? 1} />
         </div>
       </>
     );
@@ -101,6 +122,12 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
 
   const notice = (
     <div className="notice">
+      {!!game.notice?.upkeep.length && (
+        <div className="upkeep">
+          <span className="label">Vuoron alussa</span>
+          {game.notice.upkeep.map((line, i) => <span key={i} className="small">{line}</span>)}
+        </div>
+      )}
       <div className="notice-head">
         <Die value={game.die ?? 1} />
         <div>
@@ -110,7 +137,11 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
           <div className="muted small">{square?.help}</div>
         </div>
       </div>
-      {game.notice?.lines.map((line, i) => <p key={i}>{line}</p>)}
+      {!!game.notice?.lines.length && (
+        <div className={`outcome ${game.notice.mark ?? ''}`}>
+          {game.notice.lines.map((line, i) => <p key={i}>{line}</p>)}
+        </div>
+      )}
     </div>
   );
 
@@ -226,6 +257,26 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             </button>
           </PlayerCard>
         ))}
+        <button onClick={() => dispatch({ type: 'SKIP' })}>Ei kiitos</button>
+      </>
+    );
+  } else if (p?.kind === 'mental') {
+    body = (
+      <>
+        <p>Valitse pelaaja henkisen valmentajan puheille. Sisu nousee yhdellä.</p>
+        <div className="scroll-list">
+          {[...me.squad].sort((a, b) => b.skill - a.skill).map((o) => (
+            <PlayerCard key={o.id} player={o}>
+              <button
+                className="primary"
+                disabled={o.spirit >= MAX_SPIRIT || me.cash < MENTAL_COST}
+                onClick={() => dispatch({ type: 'COACH', playerId: o.id })}
+              >
+                {fmt(MENTAL_COST)}
+              </button>
+            </PlayerCard>
+          ))}
+        </div>
         <button onClick={() => dispatch({ type: 'SKIP' })}>Ei kiitos</button>
       </>
     );

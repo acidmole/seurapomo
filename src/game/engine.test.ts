@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AI_CLUB_NAMES, BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import { botAction, botStep, botToMove } from './bot';
 import {
-  EURO_AFTER, LOAN_MAX, LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, thisWeek, isBroke, loanInterest, plays, posBadge, UTILITY_SHARE, valueOf, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, LOAN_MAX, LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, thisWeek, topScorers, GOLDEN_BOOT_PRIZE, LEAGUE_PRIZE, MENTAL_COST, SCORER_SHARE, isBroke, loanInterest, plays, posBadge, UTILITY_SHARE, valueOf, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -29,7 +29,7 @@ function bot(s: GameState): Action {
     const index = me.squad.length < MAX_SQUAD ? p.options.findIndex((o) => playerValue(o.skill, o.spirit) + 100 <= me.cash) : -1;
     return index >= 0 ? { type: 'SCOUT_BUY', index } : { type: 'SKIP' };
   }
-  if (p?.kind === 'steal') return { type: 'SKIP' };
+  if (p?.kind === 'steal' || p?.kind === 'mental') return { type: 'SKIP' };
   if (p?.kind === 'crisis') return { type: 'CRISIS', pay: false };
   if (p?.kind === 'windfall') return { type: 'WINDFALL', keep: true };
   if (p?.kind === 'training') {
@@ -151,12 +151,12 @@ describe('wages', () => {
     const weekly = wages(start.clubs[me]);
     expect(weekly).toBeGreaterThan(0);
     const rolled = reduce(start, { type: 'ROLL' });
-    expect(rolled.notice!.lines[0]).toContain('Viikon palkat');
+    expect(rolled.notice!.upkeep[0]).toContain('Viikon palkat');
 
     // From the last square any roll completes the lap.
     start.clubs[me].boardPos = BOARD.length - 1;
     const lapped = reduce(start, { type: 'ROLL' });
-    expect(lapped.notice!.lines.some((line) => line.includes('kierrosbonuksen'))).toBe(true);
+    expect(lapped.notice!.upkeep.some((line) => line.includes('kierrosbonuksen'))).toBe(true);
     expect(lapped.clubs[me].boardPos).toBeLessThan(6);
   });
 });
@@ -514,6 +514,20 @@ describe('bank loan', () => {
     expect(reduce(s, { type: 'REPAY' })).toBe(s);
   });
 
+  it('charges more for every further lump, on the Fibonacci scale', () => {
+    let s = midTurn();
+    const me = currentClubId(s);
+    const totals: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      s = reduce(s, { type: 'BORROW' });
+      totals.push(loanInterest(s.clubs[me]));
+    }
+    expect(totals).toEqual([1, 2, 4, 7, 12, 20, 33]);
+    expect(reduce(s, { type: 'BORROW' })).toBe(s);
+    // Paying a lump back sheds the dearest one first.
+    expect(loanInterest(reduce(s, { type: 'REPAY' }).clubs[me])).toBe(20);
+  });
+
   it('counts the loan against a manager\'s wealth', () => {
     const s = midTurn();
     const me = currentClubId(s);
@@ -530,7 +544,8 @@ describe('bank loan', () => {
     s = reduce(s, { type: 'ROLL' });
     const paid = wages(me) + loanInterest(me);
     expect(loanInterest(me)).toBeGreaterThan(0);
-    expect(s.notice?.lines.join(' ')).toContain('korko');
+    expect(s.notice?.upkeep.join(' ')).toContain('korko');
+    expect(s.notice?.lines.join(' ')).not.toContain('korko');
     expect(before - s.clubs[me.id].cash).toBeGreaterThanOrEqual(paid - 60);
     const plain = reduce(newGame(2, 9), { type: 'ROLL' });
     expect(plain.clubs[me.id].cash - s.clubs[me.id].cash).toBe(loanInterest(me));
@@ -755,6 +770,138 @@ describe('lucky break cards', () => {
     s = playCardNow(s, CARDS.findIndex((c) => c.kind === 'sellout'));
     expect(s.clubs[currentClubId(s)]).toMatchObject({ sellout: true });
     expect(s.clubs[currentClubId(s)].boycott).toBeUndefined();
+  });
+});
+
+describe('scorers and the golden boot', () => {
+  it('names a scorer for every league goal and keeps a tally that matches the results', () => {
+    let s = newGame(2, 4);
+    for (const id of s.humans) s.clubs[id].cash = 5000;
+    s = until(s, (s) => s.round >= 6 && s.phase !== 'matchday');
+    const goals = s.schedule.flat().flatMap((f) => (f.events ?? []).filter((e) => e.goal));
+    expect(goals.length).toBeGreaterThan(40);
+    expect(goals.every((e) => typeof e.scorer === 'string' && e.scorer.length > 0)).toBe(true);
+    // Nobody has left the league in six rounds unless sold; the tally can only be at most the goals scored.
+    const tally = s.clubs.flatMap((c) => c.squad).reduce((sum, p) => sum + (p.goals ?? 0), 0);
+    expect(tally).toBeGreaterThan(0);
+    expect(tally).toBeLessThanOrEqual(goals.length);
+    const list = topScorers(s);
+    expect(list[0].player.goals).toBeGreaterThanOrEqual(list[list.length - 1].player.goals!);
+    expect(s.clubs.flatMap((c) => c.squad).filter((p) => p.pos === 'MV').every((p) => !p.goals)).toBe(true);
+  });
+
+  it('shares the goals between the lines 20, 35 and 45 per cent, and by skill within a line', () => {
+    const byLine = { PU: 0, KK: 0, HY: 0 } as Record<string, number>;
+    let star = 0, others = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      let s = newGame(2, seed);
+      for (const id of s.humans) s.clubs[id].cash = 5000;
+      // One league club gets a single outstanding forward among ordinary ones.
+      const c = s.clubs.find((x) => !x.human)!;
+      c.formation = '4-3-3';
+      const forwards = c.squad.filter((p) => p.pos === 'HY' && !p.also).slice(0, 3);
+      forwards.forEach((p, i) => { p.skill = i === 0 ? 9 : 3; });
+      const starId = forwards[0].id;
+      s = until(s, (s) => s.round >= 8 && s.phase !== 'matchday');
+      for (const club of s.clubs) {
+        for (const p of club.squad) {
+          if (!p.goals) continue;
+          if (club.id === c.id && forwards.some((f) => f.id === p.id)) {
+            if (p.id === starId) star += p.goals; else others += p.goals;
+          }
+        }
+      }
+      // Count by the line each scorer's name belongs to, over clubs whose squads have no utility players in doubt.
+      for (const f of s.schedule.flat()) {
+        for (const e of f.events ?? []) {
+          if (!e.goal) continue;
+          const who = [...s.clubs[f.home].squad, ...s.clubs[f.away].squad].find((p) => p.name === e.scorer);
+          if (who && !who.also) byLine[who.pos]++;
+        }
+      }
+    }
+    const total = byLine.PU + byLine.KK + byLine.HY;
+    expect(byLine.PU / total).toBeGreaterThan(SCORER_SHARE.PU - 0.07);
+    expect(byLine.PU / total).toBeLessThan(SCORER_SHARE.PU + 0.07);
+    expect(byLine.HY / total).toBeGreaterThan(SCORER_SHARE.HY - 0.07);
+    expect(byLine.HY / total).toBeLessThan(SCORER_SHARE.HY + 0.07);
+    // A forward three times as good as each of his two partners scores well over half the forwards' goals.
+    expect(star).toBeGreaterThan(others);
+  });
+
+  it('leaves cup goals out of the tally but still names the scorer', () => {
+    let s = newGame(2, 4);
+    for (const c of s.clubs) for (const p of c.squad) p.goals = 0;
+    s = until(s, (s) => s.results?.kind === 'league' && s.results.index === 1 && s.phase === 'matchday');
+    const before = new Map(s.clubs.flatMap((c) => c.squad).map((p) => [p.id, p.goals ?? 0]));
+    s = until(s, (s) => s.results?.kind === 'cup');
+    // A player may have left the league on a card in between, but nobody's count has moved.
+    for (const p of s.clubs.flatMap((c) => c.squad)) expect(p.goals ?? 0).toBe(before.get(p.id) ?? 0);
+    const cupGoals = s.cup[0].flatMap((t) => (t.events ?? []).filter((e) => e.goal && (e.side === 0 ? t.a : t.b).clubId !== null));
+    expect(cupGoals.length).toBeGreaterThan(0);
+    expect(cupGoals.every((e) => !!e.scorer)).toBe(true);
+  });
+
+  it('pays the top scorer\'s club at the end of the season and starts the count again', () => {
+    let s = newGame(2, 8);
+    for (const id of s.humans) s.clubs[id].cash = 5000;
+    s = until(s, (s) => s.week === s.calendar.length - 1 && s.phase === 'matchday');
+    const best = topScorers(s)[0];
+    const pos = table(s).findIndex((r) => r.id === best.clubId);
+    const cash = s.clubs[best.clubId].cash;
+    s = reduce(s, { type: 'CONTINUE' });
+    expect(s.phase).toBe('seasonEnd');
+    expect(s.goldenBoot).toEqual({ name: best.player.name, clubId: best.clubId, goals: best.player.goals });
+    expect(s.clubs[best.clubId].cash).toBe(cash + LEAGUE_PRIZE[pos] + GOLDEN_BOOT_PRIZE);
+    s = reduce(s, { type: 'CONTINUE' });
+    expect(s.goldenBoot).toBeNull();
+    expect(s.clubs.flatMap((c) => c.squad).every((p) => p.goals === undefined)).toBe(true);
+  });
+});
+
+describe('mental coach', () => {
+  /** The current manager standing on the mental coach's square. */
+  const atCoach = () => {
+    const s = newGame(2, 9);
+    const me = s.clubs[currentClubId(s)];
+    // The square before it, so that the card that moves a manager on is not needed: land there directly.
+    me.boardPos = BOARD.indexOf('mental');
+    s.phase = 'manage';
+    s.pending = { kind: 'mental' };
+    s.notice = { square: me.boardPos, upkeep: [], lines: [] };
+    return s;
+  };
+
+  it('has a square of its own, where there used to be a third training camp', () => {
+    expect(BOARD.filter((x) => x === 'mental')).toHaveLength(1);
+    expect(BOARD.filter((x) => x === 'training')).toHaveLength(2);
+    expect(BOARD).toHaveLength(24);
+  });
+
+  it('raises one player\'s sisu by one for much less than a training camp', () => {
+    const s = atCoach();
+    const me = s.clubs[currentClubId(s)];
+    const pupil = me.squad.find((p) => p.spirit < 9)!;
+    expect(MENTAL_COST).toBeLessThan(trainingCost(pupil));
+    const after = reduce(s, { type: 'COACH', playerId: pupil.id });
+    expect(after.clubs[me.id].squad.find((p) => p.id === pupil.id)!.spirit).toBe(pupil.spirit + 1);
+    expect(after.clubs[me.id].squad.find((p) => p.id === pupil.id)!.skill).toBe(pupil.skill);
+    expect(after.clubs[me.id].cash).toBe(me.cash - MENTAL_COST);
+    expect(after.pending).toBeNull();
+  });
+
+  it('can be turned down, cannot be had on credit and stops at nine', () => {
+    const s = atCoach();
+    const me = s.clubs[currentClubId(s)];
+    expect(reduce(s, { type: 'SKIP' }).pending).toBeNull();
+    me.squad[0].spirit = 9;
+    expect(reduce(s, { type: 'COACH', playerId: me.squad[0].id })).toBe(s);
+    me.cash = MENTAL_COST - 1;
+    expect(reduce(s, { type: 'COACH', playerId: me.squad[1].id })).toBe(s);
+    me.auto = true;
+    expect(botAction(s)).toEqual({ type: 'SKIP' });
+    me.cash = 500;
+    expect(botAction(s).type).toBe('COACH');
   });
 });
 

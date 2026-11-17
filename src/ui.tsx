@@ -1,6 +1,23 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { POS_PATTERN, fmt } from './game/data';
-import { level, posName, valueOf, type Player } from './game/engine';
+import { botAction } from './game/bot';
+import { level, posName, valueOf, type GameState, type Player } from './game/engine';
+
+/** Pause before each move a computer-run manager makes. */
+export const BOT_MOVE_MS = 1700;
+/** Before a computer manager ends its turn, the others get this long to read what happened to it. */
+export const BOT_READ_MS = 3500;
+/** How long the computer waits before the move it is about to make. */
+export const botPause = (game: GameState) => (botAction(game).type === 'END_TURN' ? BOT_READ_MS : BOT_MOVE_MS);
+
+/** A fuse that burns down while the computer waits to move, so everyone can see the game has not stopped. */
+export function Fuse({ ms }: { ms: number }) {
+  return (
+    <div className="fuse" aria-hidden="true">
+      <div className="fuse-burn" style={{ animationDuration: `${ms}ms` }} />
+    </div>
+  );
+}
 
 /** A line icon drawn from one SVG path on a 24 × 24 grid. */
 export function Icon({ path }: { path: string }) {
@@ -30,6 +47,8 @@ const PIPS: Record<number, number[]> = {
 
 /** How long the die tumbles before it lands. */
 export const ROLL_MS = 900;
+/** How long the landed die stays up, showing the roll, before play moves on. */
+export const LAND_MS = 1100;
 
 /**
  * The sound of a die rattling across a table: a run of short noise clicks that slow down and fade.
@@ -77,9 +96,9 @@ export function TumblingDie() {
   );
 }
 
-export function Die({ value }: { value: number }) {
+export function Die({ value, big }: { value: number; big?: boolean }) {
   return (
-    <div className="die die-landed" role="img" aria-label={`Noppa: ${value}`}>
+    <div className={big ? 'die die-big die-landed' : 'die die-landed'} role="img" aria-label={`Noppa: ${value}`}>
       {Array.from({ length: 9 }, (_, i) => <span key={i} className={PIPS[value]?.includes(i) ? 'pip' : ''} />)}
     </div>
   );
