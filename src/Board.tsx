@@ -140,13 +140,29 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
       {!!game.notice?.lines.length && (
         <div className={`outcome ${game.notice.mark ?? ''}`}>
           {game.notice.lines.map((line, i) => <p key={i}>{line}</p>)}
+          {game.notice.buyer !== undefined && (
+            <p className="buyer">
+              <span className="label">Ostaja</span>
+              <span className="dot big" style={{ background: game.clubs[game.notice.buyer].color }} />
+              <strong className="display">{game.clubs[game.notice.buyer].name}</strong>
+              {game.clubs[game.notice.buyer].auto && <span className="robot">Tietokone</span>}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 
   let body: ReactNode;
-  if (me.auto && p?.kind !== 'auction') {
+  if (p?.kind === 'release') {
+    const loser = game.clubs[p.club];
+    body = loser.auto ? thinking : (
+      <p>
+        <strong>{loser.name}</strong>: joukkueessa on nyt {loser.squad.length} pelaajaa, ja enintään {MAX_SQUAD} mahtuu.
+        Myy yksi pelaaja oikealta, niin peli jatkuu.
+      </p>
+    );
+  } else if (me.auto && p?.kind !== 'auction') {
     body = (
       <>
         {p?.kind === 'auctionPick' || p?.kind === 'scout' ? p.options.map((o) => <PlayerCard key={o.id} player={o} />) : null}
@@ -168,6 +184,7 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
     const bidder = game.clubs[p.active[p.idx]];
     const min = p.leader === null ? p.minBid : p.bid + 5;
     const bidderFull = bidder.squad.length >= MAX_SQUAD && bidder.id !== p.owner;
+    const short = min > bidder.cash;
     body = (
       <>
         <PlayerCard player={p.player} />
@@ -203,15 +220,15 @@ function Center({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
             );
           })}
         </ul>
-        {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Myy ensin pelaaja oikealta, jos haluat tarjota.</p>}
-        {!bidderFull && min > bidder.cash && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia tai ottaa lainaa oikealta ja tarjota sitten.</p>}
+        {bidderFull && <p className="muted small">Joukkue on täynnä ({MAX_SQUAD} pelaajaa). Voit silti tarjota: jos voitat, sinun on myytävä yksi pelaaja.</p>}
+        {short && <p className="muted small">Kassa ei riitä. Voit myydä pelaajia tai ottaa lainaa oikealta ja tarjota sitten.</p>}
         {bidder.auto ? thinking : (
         <div className="row">
           {[0, 5, 20, 45].map((extra) => (
             <button
               key={extra}
               className="primary"
-              disabled={bidderFull || min + extra > bidder.cash}
+              disabled={min + extra > bidder.cash}
               onClick={() => dispatch({ type: 'BID', amount: min + extra })}
             >
               {fmt(min + extra)}

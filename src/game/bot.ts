@@ -90,7 +90,8 @@ export function botAction(s: GameState): Action {
     const min = p.leader === null ? p.minBid : p.bid + 5;
     const owner = p.owner === bidder.id;
     const limit = owner ? valueOf(p.player) * 1.1 : worth(bidder, p.player);
-    const room = owner || bidder.squad.length < MAX_SQUAD;
+    // With a full squad it only bids for a player who would start; the weakest reserve then makes way.
+    const room = owner || bidder.squad.length < MAX_SQUAD || improves(bidder, p.player);
     if (!room || min > limit || min > biddingPower(bidder, p.player)) return { type: 'PASS' };
     // Short of cash for a player worth having: sell the weakest reserve first, then bid.
     if (min > bidder.cash) {
@@ -100,6 +101,7 @@ export function botAction(s: GameState): Action {
     }
     return { type: 'BID', amount: min };
   }
+  if (p?.kind === 'release') return { type: 'SELL', playerId: worstFirst(s.clubs[p.club])[0].id };
   if (p?.kind === 'auctionPick') {
     return { type: 'AUCTION_PICK', index: p.options[1].skill > p.options[0].skill ? 1 : 0 };
   }

@@ -1,5 +1,5 @@
 import {
-  AI_CLUB_NAMES, BOARD, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LEGEND, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, WEAKEST_CLUB, fmt,
+  AI_CLUB_NAMES, BOARD, CLUB_ROSTERS, CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, CARDS, CUP_SIZE, FIRST_NAMES, FOREIGN_CLUBS, FOREIGN_NAMES, FOREIGN_SHARE, FORMATIONS, LAST_NAMES, LEGEND, LOWER_CLUBS, LOWER_LEVELS, POS_NAME, WEAKEST_CLUB, fmt,
   type Card, type FormationId, type Pos, type Shape,
 } from './data';
 
@@ -120,7 +120,15 @@ export interface Fixture {
 }
 
 /** A league club (`clubId`), or a foreign or lower-division club that is only a name and a level. */
-export interface Entrant { clubId: number | null; name: string; level: number; /** Set for a lower-division club. */ division?: 2 | 3 }
+export interface Entrant {
+  clubId: number | null;
+  name: string;
+  level: number;
+  /** Sisu of a club from outside the league, which has no players of its own to average. */
+  spirit?: number;
+  /** Set for a lower-division club. */
+  division?: 2 | 3;
+}
 /**
  * One knockout match. After a shoot-out (`pens`) the winner is credited with one extra goal, so the score
  * always shows who went through.
@@ -150,6 +158,8 @@ export type Pending =
     }
   /** The manager may take any one player from another club. */
   | { kind: 'steal' }
+  /** A club won an auction with a full squad and must sell a player, any player, before the game goes on. */
+  | { kind: 'release'; club: number }
   | { kind: 'scout'; options: Player[] }
   | { kind: 'training'; free: boolean }
   /** The manager may send one player to the mental coach. */
@@ -206,6 +216,8 @@ export interface GameState {
     lines: string[];
     /** The card drawn was a crisis or a stroke of luck. */
     mark?: Mark;
+    /** The club that won this turn's auction, so the screen can show plainly who got the player. */
+    buyer?: number;
   } | null;
   /** The season week by week: league rounds, with cup and European rounds on weeks of their own in between. */
   calendar: Week[];
@@ -346,17 +358,32 @@ function newPlayer(s: GameState, line: Pos, skill: number): Player {
 }
 const randomPos = (s: GameState): Pos => pick(s, ['MV', 'PU', 'PU', 'PU', 'KK', 'KK', 'KK', 'HY', 'HY'] as Pos[]);
 
-function newSquad(s: GameState, offset: number): Player[] {
+function newSquad(s: GameState, offset: number, clubName = ''): Player[] {
   const skills = shuffle(s, [6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 3, 3, 3]);
-  const positions: Pos[] = ['MV', 'MV', 'PU', 'PU', 'PU', 'PU', 'PU', 'KK', 'KK', 'KK', 'KK', 'HY', 'HY', 'HY'];
+  const shape: Pos[] = ['MV', 'MV', 'PU', 'PU', 'PU', 'PU', 'PU', 'KK', 'KK', 'KK', 'KK', 'HY', 'HY', 'HY'];
+  // A club with a known roster starts with those players; a player beyond the usual number for his line takes a place from the fullest line.
+  const roster = CLUB_ROSTERS[clubName] ?? [];
+  const open = [...shape];
+  for (const known of roster) {
+    const count = (pos: Pos) => open.filter((o) => o === pos).length;
+    const fullest = (['PU', 'KK', 'HY', 'MV'] as Pos[]).reduce((a, b) => (count(b) > count(a) ? b : a));
+    open.splice(open.indexOf(count(known.pos) ? known.pos : fullest), 1);
+  }
+  const fill = open.slice(0, Math.max(0, shape.length - roster.length));
   // No two players in a squad share a first name or a surname, so nobody is mistaken for a team-mate.
-  const taken = new Set<string>();
-  return positions.map((pos, i) => {
-    const player = newPlayer(s, pos, skills[i] + offset);
+  const taken = new Set<string>(roster.map((known) => known.name));
+  const known = roster.map((r, i) => {
+    const player = newPlayer(s, r.pos, skills[i] + offset);
+    delete player.also;
+    return { ...player, name: r.name, pos: r.pos, ...(r.also ? { also: r.also } : {}) };
+  });
+  const rest = fill.map((pos, i) => {
+    const player = newPlayer(s, pos, skills[roster.length + i] + offset);
     for (let tries = 0; tries < 20 && player.name.split(' ').some((part) => taken.has(part)); tries++) player.name = newName(s);
     for (const part of player.name.split(' ')) taken.add(part);
     return player;
   });
+  return [...known, ...rest];
 }
 
 export interface Slot { pos: Pos; player: Player | null; eff: number }
@@ -491,6 +518,12 @@ export const TEMPO_CHANCES = 0.5;
 export const MIDFIELD_COUNT_CHANCES = 0.6;
 /** Chances won or lost per point of average sisu above or below 5, when the side is in a tough spot. */
 export const SPIRIT_CHANCES = 0.6;
+/**
+ * Extra chances for the weaker side per point of average sisu above 5 and per level it is weaker in total,
+ * counted up to a gap of UNDERDOG_GAP_MAX levels.
+ */
+export const UNDERDOG_CHANCES = 0.05;
+export const UNDERDOG_GAP_MAX = 10;
 
 /**
  * Sisu only counts in a tough spot: playing away, in a knockout tie, or as the weaker side on paper.
@@ -498,7 +531,11 @@ export const SPIRIT_CHANCES = 0.6;
  */
 export function spiritBonus(x: Strength, y: Strength, tough: boolean): number {
   const total = (z: Strength) => z.att + z.mid + z.def + z.gk;
-  return tough || total(x) < total(y) ? SPIRIT_CHANCES * (x.spirit - 5) : 0;
+  const gap = total(y) - total(x);
+  if (!tough && gap <= 0) return 0;
+  // A gritty side that is badly outgunned digs deeper still: the bigger the gap, the more its sisu is worth.
+  const underdog = Math.max(0, x.spirit - 5) * UNDERDOG_CHANCES * Math.max(0, Math.min(UNDERDOG_GAP_MAX, gap));
+  return SPIRIT_CHANCES * (x.spirit - 5) + underdog;
 }
 
 /** Chance that `x` wins a penalty shoot-out against `y`: nerve decides. */
@@ -554,10 +591,21 @@ export const STOPPAGE = 5;
 /** Chance that a side forces one more scoring chance in stoppage time: sisu keeps a team going to the whistle. */
 export const stoppageOdds = (x: Strength) => Math.max(0, Math.min(0.5, 0.1 * (x.spirit - 3.5)));
 
+/** The closing spell: the last ten minutes of normal time. */
+export const LATE_MINUTES = 10;
+/** Chance of an extra scoring chance in the closing spell, per point of average sisu above 4, and the most it can be. */
+export const LATE_CHANCE_PER_SISU = 0.05;
+export const LATE_CHANCE_MAX = 0.25;
+/** Chance that a gritty side forces one more scoring chance in the last ten minutes, in any match: 5 % at sisu 5, 25 % at 9. */
+export const lateChanceOdds = (x: Strength) => Math.max(0, Math.min(LATE_CHANCE_MAX, LATE_CHANCE_PER_SISU * (x.spirit - 4)));
+
 function playSide(s: GameState, side: 0 | 1, x: Strength, y: Strength, bonus: number, surge: boolean): MatchEvent[] {
   const chances = poisson(s, expectedChances(x, y, bonus));
   const odds = scoringOdds(x, y);
   const events = Array.from({ length: chances }, (): MatchEvent => ({ minute: 1 + randInt(s, FULL_TIME), side, goal: rand(s) < odds }));
+  if (rand(s) < lateChanceOdds(x)) {
+    events.push({ minute: FULL_TIME - LATE_MINUTES + 1 + randInt(s, LATE_MINUTES), side, goal: rand(s) < odds });
+  }
   if (rand(s) < stoppageOdds(x) || surge) {
     events.push({ minute: FULL_TIME + 1 + randInt(s, STOPPAGE), side, goal: rand(s) < odds });
   }
@@ -623,6 +671,10 @@ export function winStreak(s: GameState, clubId: number): number {
   return streak;
 }
 
+/** Sisu of a club from outside the league: a little either side of ordinary, so a few are grittier than their level. */
+export const OUTSIDE_SPIRIT: [number, number] = [4, 6.5];
+const outsideSpirit = (s: GameState) => Math.round((OUTSIDE_SPIRIT[0] + rand(s) * (OUTSIDE_SPIRIT[1] - OUTSIDE_SPIRIT[0])) * 10) / 10;
+
 function makeTies(entrants: Entrant[]): Tie[] {
   const ties: Tie[] = [];
   for (let i = 0; i < entrants.length; i += 2) ties.push({ a: entrants[i], b: entrants[i + 1], ag: null, bg: null, winner: null, pens: false });
@@ -637,7 +689,7 @@ function makeEuro(s: GameState, tier: number, clubIds: number[], names: string[]
     const clubId = i === 0 ? clubIds[0] : i === 4 ? clubIds[1] : undefined;
     return clubId !== undefined
       ? { clubId, name: '', level: 0 }
-      : { clubId: null, name: names.pop()!, level: level() };
+      : { clubId: null, name: names.pop()!, level: level(), spirit: outsideSpirit(s) };
   });
   return { tier, rounds: [makeTies(entrants)] };
 }
@@ -647,7 +699,8 @@ function makeEuro(s: GameState, tier: number, clubIds: number[], names: string[]
 const club = (s: GameState, id: number) => s.clubs.find((c) => c.id === id)!;
 export const currentClubId = (s: GameState) => s.order[0] ?? s.humans[s.week % Math.max(1, s.humans.length)] ?? 0;
 /** The club that has to act right now: the bidder during an auction, otherwise the manager whose turn it is. */
-export const actingClubId = (s: GameState) => (s.pending?.kind === 'auction' ? s.pending.active[s.pending.idx] : currentClubId(s));
+export const actingClubId = (s: GameState) =>
+  s.pending?.kind === 'auction' ? s.pending.active[s.pending.idx] : s.pending?.kind === 'release' ? s.pending.club : currentClubId(s);
 export const thisWeek = (s: GameState): Week | undefined => s.calendar[s.week];
 
 /** Every manager moves once per round; who goes first rotates. */
@@ -693,9 +746,17 @@ function startSeason(s: GameState) {
     const division = i < lowerCount / 2 ? 2 : 3;
     const weakest = i === lowerCount - 1;
     const [min, max] = weakest ? WEAKEST_CLUB.level : LOWER_LEVELS[division];
-    cupEntrants.push({ clubId: null, name: weakest ? WEAKEST_CLUB.name : lowerNames.pop()!, level: min + rand(s) * (max - min), division });
+    cupEntrants.push({ clubId: null, name: weakest ? WEAKEST_CLUB.name : lowerNames.pop()!, level: min + rand(s) * (max - min), spirit: outsideSpirit(s), division });
   }
-  s.cup = [makeTies(shuffle(s, cupEntrants))];
+  const draw = shuffle(s, cupEntrants);
+  // The weakest club of all is always drawn against a league club, so its day out is there for everyone to see.
+  const minnow = draw.findIndex((e) => e.name === WEAKEST_CLUB.name);
+  const partner = minnow ^ 1;
+  if (draw[partner].clubId === null) {
+    const league = pick(s, draw.map((e, i) => (e.clubId !== null ? i : -1)).filter((i) => i >= 0));
+    [draw[partner], draw[league]] = [draw[league], draw[partner]];
+  }
+  s.cup = [makeTies(draw)];
   const foreign = shuffle(s, [...FOREIGN_CLUBS]);
   s.euro = s.qualified.map((ids, tier) => makeEuro(s, tier, ids, foreign));
   s.die = null;
@@ -734,7 +795,7 @@ export function createGame(config: GameConfig): GameState {
       color: human ? human.color : '#7b8794',
       cash: START_CASH,
       loan: 0,
-      squad: newSquad(s, human ? 0 : aiOffsets[ai]),
+      squad: newSquad(s, human ? 0 : aiOffsets[ai], human ? '' : aiNames[ai]),
       formation: human ? '4-4-2' : pick(s, ['4-4-2', '4-3-3', '5-3-2', '3-4-3', '4-4-2'] as FormationId[]),
       boardPos: 0,
       morale: 0,
@@ -767,7 +828,9 @@ function addYouth(s: GameState, c: Club, lines: string[]) {
     lines.push('Joukkue on täynnä, joten juniori jää akatemiaan.');
     return;
   }
-  const p = newPlayer(s, randomPos(s), 2 + randInt(s, 3));
+  // A graduate is never worse than the weakest player the club already has: the academy knows the standard.
+  const floor = Math.min(...c.squad.map((x) => x.skill));
+  const p = newPlayer(s, randomPos(s), Math.max(2 + randInt(s, 3), floor));
   c.squad.push(p);
   lines.push(`Joukkueeseen nousee ${p.name} (${posName(p)}, taso ${p.skill}).`);
 }
@@ -807,10 +870,12 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]): Mark | un
       if (c.squad.length <= MIN_SQUAD) {
         lines.push('Joukkueessa on kuitenkin niin vähän pelaajia, että hän suostuu jäämään.');
       } else if (target) {
-        const fee = valueOf(target);
+        const fee = Math.round((valueOf(target) * card.rate) / 5) * 5;
         c.squad.splice(c.squad.indexOf(target), 1);
         c.cash += fee;
-        lines.push(`Saat hänestä täyden hinnan, ${fmt(fee)}.`);
+        lines.push(card.rate > 1
+          ? `Ostaja maksaa sopimuksen purkamisesta ylihintaa: saat ${fmt(fee)}, kun pelaajan arvo on ${fmt(valueOf(target))}.`
+          : `Saat hänestä täyden hinnan, ${fmt(fee)}.`);
       }
       break;
     case 'raid': {
@@ -925,6 +990,17 @@ function playCard(s: GameState, c: Club, card: Card, lines: string[]): Mark | un
     case 'fatigue':
       for (const p of c.squad) p.fitness = Math.max(1, p.fitness - card.amount);
       break;
+    case 'develop': {
+      const pupils = c.squad.filter((p) => p.skill < MAX_LEVEL);
+      if (pupils.length) {
+        const p = pick(s, pupils);
+        p.skill = Math.min(MAX_LEVEL, p.skill + card.amount);
+        lines.push(`${p.name} (${posName(p)}) kehittyy harppauksin. Taito nousee ${p.skill}:een.`);
+      } else {
+        lines.push('Joukkueessa ei kuitenkaan ole enää ketään, jolla olisi opittavaa.');
+      }
+      break;
+    }
     case 'boycott':
       c.boycott = true;
       delete c.sellout;
@@ -1091,8 +1167,10 @@ function settleAuction(s: GameState) {
         ? `${winner.name} vie pelaajan ${a.player.name} hintaan ${fmt(a.bid)}. ${club(s, a.owner).name} saa kauppahinnan.`
         : `${winner.name} voittaa huutokaupan: ${a.player.name} (${posName(a.player)}, taso ${a.player.skill}) hintaan ${fmt(a.bid)}.${sponsored ? ` Sponsori maksaa siitä ${fmt(sponsored)}.` : ''}`;
     s.notice!.lines.push(line);
+    s.notice!.buyer = winner.id;
     log(s, line);
-    s.pending = null;
+    // A full squad may bid, but the winner then has one player too many and must let somebody go.
+    s.pending = winner.squad.length > MAX_SQUAD ? { kind: 'release', club: winner.id } : null;
   }
 }
 
@@ -1218,7 +1296,7 @@ function playTie(s: GameState, t: Tie, gate: number): Entrant {
   // A club from outside the league plays like a 4-4-2 whose players are all of its level.
   const strength = (e: Entrant): Strength =>
     e.clubId === null
-      ? { att: 2 * e.level, mid: 4 * e.level, def: 4 * e.level, gk: e.level, spirit: 5, shape: FORMATIONS['4-4-2'] }
+      ? { att: 2 * e.level, mid: 4 * e.level, def: 4 * e.level, gk: e.level, spirit: e.spirit ?? 5, shape: FORMATIONS['4-4-2'] }
       : lineup(club(s, e.clubId));
   const a = strength(t.a);
   const b = strength(t.b);
@@ -1352,8 +1430,7 @@ export function reduce(state: GameState, action: Action): GameState {
       if (p?.kind !== 'auction') return state;
       const bidder = club(s, p.active[p.idx]);
       const min = p.leader === null ? p.minBid : p.bid + 5;
-      const full = bidder.squad.length >= MAX_SQUAD && bidder.id !== p.owner;
-      if (action.amount < min || action.amount > bidder.cash || full) return state;
+      if (action.amount < min || action.amount > bidder.cash) return state;
       p.bid = action.amount;
       p.leader = bidder.id;
       p.idx = (p.idx + 1) % p.active.length;
@@ -1470,6 +1547,10 @@ export function reduce(state: GameState, action: Action): GameState {
       const [sold] = seller.squad.splice(i, 1);
       seller.cash += sellPrice(sold);
       log(s, `${seller.name} myy pelaajan ${sold.name} hintaan ${fmt(sellPrice(sold))}.`);
+      if (p?.kind === 'release' && seller.squad.length <= MAX_SQUAD) {
+        s.notice!.lines.push(`${seller.name} tekee tilaa: ${sold.name} myydään hintaan ${fmt(sellPrice(sold))}.`);
+        s.pending = null;
+      }
       return s;
     }
 

@@ -79,8 +79,8 @@ export type Card = {
   /** Temporary form: `amount` on the player's skill for `matches` league rounds, or to the end of the season when null. */
   | { kind: 'form'; amount: number; matches: number | null; text: string }
   | { kind: 'ban'; text: string }
-  /** A starter walks out; the club is paid his full value. */
-  | { kind: 'leave'; text: string }
+  /** A starter walks out; the club is paid `rate` times his value: more than he is worth when he is bought out of his contract. */
+  | { kind: 'leave'; rate: number; text: string }
   /** The best-placed manager in the league loses his best player for half his value, whoever drew the card. */
   | { kind: 'raid'; text: string }
   /** The best player of the best-placed manager misses this many league matches, injured or banned. */
@@ -123,6 +123,8 @@ export type Card = {
   | { kind: 'fatigue'; amount: number; text: string }
   /** The club's next home league match brings no gate money. */
   | { kind: 'boycott'; text: string }
+  /** A random player anywhere in the squad gains this much skill for good. */
+  | { kind: 'develop'; amount: number; text: string }
   /** The club's next home league match is a sell-out and brings double gate money. */
   | { kind: 'sellout'; text: string }
   /** The manager chooses: bank `amount`, or pass it on to the players for good morale in the next match. */
@@ -153,8 +155,8 @@ export const CARDS: Card[] = [
   { kind: 'spirit', amount: -1, text: '{p} riitelee valmentajan kanssa ja murjottaa. Sisu laskee.' },
   { kind: 'surge', text: 'Kannattajat lupaavat laulaa loppuun asti. Seuraavassa sarjaottelussa saatte varman maalipaikan lisäajalla.' },
   { kind: 'fitness', lucky: true, text: 'Seura palkkaa kuntovalmentajan viikoksi. Koko joukkueen kunto palautuu täyteen.' },
-  { kind: 'leave', text: '{p} on saanut tarpeekseen valmentajasta ja lähtee seurasta.' },
-  { kind: 'leave', text: '{p} saa ulkomailta tarjouksen, josta ei voi kieltäytyä, ja lähtee.' },
+  { kind: 'leave', rate: 1, text: '{p} on saanut tarpeekseen valmentajasta ja lähtee seurasta.' },
+  { kind: 'leave', rate: 1.5, text: '{p} saa ulkomailta tarjouksen, josta ei voi kieltäytyä, ja lähtee kesken sopimuksen.' },
   { kind: 'raid', text: 'Ulkomainen suurseura on seurannut sarjan kärkeä ja tekee tarjouksen, josta ei voi kieltäytyä.' },
   { kind: 'raid', text: 'Maajoukkueen valmentaja kehuu sarjan kärkiseuraa, ja agentit heräävät.' },
   { kind: 'leaderOut', reason: 'injury', matches: 3, text: 'Kärkijoukkueen harjoituksissa otetaan liian tosissaan.' },
@@ -172,6 +174,8 @@ export const CARDS: Card[] = [
   { kind: 'cash', amount: 30, lucky: true, text: 'Edesmennyt kannattaja on muistanut seuraa testamentissaan.' },
   { kind: 'windfall', amount: 20, lucky: true, text: 'Paikallinen yrittäjä haluaa palkita joukkueen. Otat rahat seuran kassaan tai lupaat ne pelaajille, jolloin joukkue pelaa seuraavan ottelun hyvässä vireessä.' },
   { kind: 'sellout', lucky: true, text: 'Seuraava kotiottelunne myydään loppuun, ja jonot ulottuvat torille asti. Lipputulot ovat kaksinkertaiset.' },
+  { kind: 'develop', amount: 2, lucky: true, text: 'Seura pääsee mukaan liiton kehitysohjelmaan, ja yksi pelaajistasi valitaan siihen.' },
+  { kind: 'develop', amount: 2, lucky: true, text: 'Entinen maajoukkuepelaaja ottaa yhden pelaajistasi suojatikseen.' },
   { kind: 'boycott', crisis: true, text: 'Kannattajat ovat saaneet tarpeekseen seurajohdosta ja jättävät seuraavan kotiottelun väliin. Siitä ei kerry lipputuloja.' },
   { kind: 'wealthTax', share: 0.15, text: 'Verotarkastaja kiinnostuu liigan rikkaimmasta seurasta.' },
   { kind: 'youth', text: 'Junioripäällikkö tuo harjoituksiin lupaavan nuoren. Hän liittyy joukkueeseen ilmaiseksi.' },
@@ -221,13 +225,27 @@ export const FOREIGN_SHARE = 0.15;
 export const AI_CLUB_NAMES = [
   'Kasiysi Rovers',
   'Kyröskosken Pärske',
-  'Hanhivaaran Pallo',
+  'FC Jääs',
   'Luopion Kinkki',
   'Billa FC',
   'PeeTeeKoo',
   'Kurvin Mutka',
   'Futisgasellit',
 ];
+
+/**
+ * Clubs whose players are known by name: these are always in the starting squad, and the rest of the squad
+ * is filled in as for any other club.
+ */
+export const CLUB_ROSTERS: Record<string, { name: string; pos: Pos; also?: 'PU' | 'HY' }[]> = {
+  'FC Jääs': [
+    { name: 'Raski', pos: 'MV' }, { name: 'Poikku', pos: 'MV' },
+    { name: 'Koljonen', pos: 'PU' }, { name: 'Kossu', pos: 'PU' }, { name: 'Piippo', pos: 'PU' },
+    { name: 'Pulla', pos: 'KK', also: 'PU' },
+    { name: 'Zeeri', pos: 'KK' }, { name: 'Tim', pos: 'KK' }, { name: 'Kai', pos: 'KK' },
+    { name: 'Maco', pos: 'HY' }, { name: 'Siitonen', pos: 'HY' }, { name: 'Kärtsy', pos: 'HY' }, { name: 'Viljanen', pos: 'HY' },
+  ],
+};
 
 /** Invented opponents for the European cups. */
 export const FOREIGN_CLUBS = [

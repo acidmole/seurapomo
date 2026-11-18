@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AI_CLUB_NAMES, BOARD, CARDS, EURO_COMPS, FOREIGN_NAMES, LOWER_LEVELS, FORMATIONS, HUMAN_COLORS, type FormationId } from './data';
 import { botAction, botStep, botToMove } from './bot';
 import {
-  EURO_AFTER, LOAN_MAX, LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, thisWeek, topScorers, GOLDEN_BOOT_PRIZE, LEAGUE_PRIZE, MENTAL_COST, SCORER_SHARE, isBroke, loanInterest, plays, posBadge, UTILITY_SHARE, valueOf, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
+  EURO_AFTER, LOAN_MAX, LOAN_STEP, MATCH_BONUS_COST, MAX_LEVEL, MAX_SQUAD, MIN_SQUAD, ROUNDS, createGame, cupGate, currentClubId, duel, euroGate, expectedChances, gateIncome, level, lineup, playCardNow, scoringOdds, shootoutOdds, spiritBonus, standing, stoppageOdds, lateChanceOdds, thisWeek, topScorers, GOLDEN_BOOT_PRIZE, LEAGUE_PRIZE, MENTAL_COST, SCORER_SHARE, isBroke, loanInterest, plays, posBadge, UTILITY_SHARE, valueOf, wages, wealth, winStreak, playerValue, reduce, table, trainingCost,
   type Action, type GameState,
 } from './engine';
 
@@ -17,6 +17,7 @@ function newGame(humans: number, seed = 1): GameState {
 function bot(s: GameState): Action {
   const p = s.pending;
   const club = (id: number) => s.clubs.find((c) => c.id === id)!;
+  if (p?.kind === 'release') return { type: 'SELL', playerId: [...club(p.club).squad].sort((a, b) => a.skill - b.skill)[0].id };
   if (p?.kind === 'auctionPick') return { type: 'AUCTION_PICK', index: 0 };
   if (p?.kind === 'auction') {
     const bidder = club(p.active[p.idx]);
@@ -70,7 +71,7 @@ describe('names', () => {
     const s = newGame(2, 21);
     for (const c of s.clubs) {
       const finnish = c.squad.map((p) => p.name).filter((n) => !FOREIGN_NAMES.includes(n));
-      expect(new Set(finnish.map((n) => n.split(' ')[1])).size).toBe(finnish.length);
+      expect(new Set(finnish.map((n) => n.split(' ').pop())).size).toBe(finnish.length);
       expect(new Set(c.squad.map((p) => p.name)).size).toBe(c.squad.length);
     }
     const foreign = s.clubs.flatMap((c) => c.squad).filter((p) => FOREIGN_NAMES.includes(p.name)).length;
@@ -250,7 +251,18 @@ describe('cards', () => {
     const gone = start.clubs[me].squad.filter((p) => !s.clubs[me].squad.some((q) => q.id === p.id));
     expect(gone).toHaveLength(1);
     expect(starters.some((p) => p.id === gone[0].id)).toBe(true);
-    expect(s.clubs[me].cash).toBe(start.clubs[me].cash + playerValue(gone[0].skill, gone[0].spirit));
+    expect(s.clubs[me].cash).toBe(start.clubs[me].cash + valueOf(gone[0]));
+  });
+
+  it('pays half as much again when a foreign club buys a player out of his contract', () => {
+    const start = newGame(2, 9);
+    const me = currentClubId(start);
+    const s = playCardNow(start, CARDS.findIndex((c) => c.kind === 'leave' && c.rate > 1));
+    const gone = start.clubs[me].squad.filter((p) => !s.clubs[me].squad.some((q) => q.id === p.id));
+    expect(gone).toHaveLength(1);
+    const fee = s.clubs[me].cash - start.clubs[me].cash;
+    expect(fee).toBe(Math.round((valueOf(gone[0]) * 1.5) / 5) * 5);
+    expect(fee).toBeGreaterThan(valueOf(gone[0]));
   });
 
   it('has bad luck that finds the leaders', () => {
@@ -282,6 +294,19 @@ describe('cards', () => {
     expect(taxed.clubs[start.humans[2]].cash).toBe(850);
   });
 
+
+  it('gives FC Jääs its own players, without first names', () => {
+    const game = createGame({ seed: 5, clubs: [{ name: 'A', color: '#000' }, { name: 'B', color: '#111' }] });
+    const club = game.clubs.find((c) => c.name === 'FC Jääs')!;
+    const names = club.squad.map((p) => p.name);
+    for (const name of ['Koljonen', 'Maco', 'Siitonen', 'Raski', 'Poikku', 'Pulla', 'Zeeri', 'Kärtsy', 'Viljanen', 'Kossu', 'Tim', 'Kai', 'Piippo']) expect(names).toContain(name);
+    expect(club.squad).toHaveLength(14);
+    expect(club.squad.find((p) => p.name === 'Pulla')).toMatchObject({ pos: 'KK', also: 'PU' });
+    expect(club.squad.filter((p) => p.pos === 'MV').map((p) => p.name).sort()).toEqual(['Poikku', 'Raski']);
+    // Koljonen, Kossu, Piippo and one more, plus Pulla, who can drop back from midfield.
+    expect(club.squad.filter((p) => p.pos === 'PU' || p.also === 'PU')).toHaveLength(5);
+    expect(game.clubs.some((c) => c.name === 'Hanhivaaran Pallo')).toBe(false);
+  });
   it('brings the legend to auction once, at half the price and half the wages', () => {
     let s = playCardNow(newGame(3, 9), find('legend'));
     if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
@@ -457,12 +482,50 @@ describe('debt', () => {
     expect(s.clubs[bidder.id].squad).toHaveLength(bidder.squad.length - 3);
     const after = reduce(s, { type: 'BID', amount: min });
     expect(after.pending?.kind === 'auction' && after.pending.leader).toBe(bidder.id);
+    // Once everyone else has passed, the notice names the club that got the player.
+    let done = after;
+    while (done.pending?.kind === 'auction') done = reduce(done, { type: 'PASS' });
+    expect(done.notice?.buyer).toBe(bidder.id);
 
     let scout = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'goto' && c.square === 'scout'));
     const me = scout.clubs[currentClubId(scout)];
     scout = reduce(scout, { type: 'SELL', playerId: me.squad[0].id });
     expect(scout.pending?.kind).toBe('scout');
     expect(scout.clubs[me.id].squad).toHaveLength(me.squad.length - 1);
+  });
+
+  it('lets a full squad bid, and makes the winner sell a player before the game goes on', () => {
+    let s = playCardNow(newGame(3, 9), CARDS.findIndex((c) => c.kind === 'auction'));
+    if (s.pending?.kind !== 'auction') throw new Error('expected an auction');
+    const bidder = s.clubs[s.pending.active[s.pending.idx]];
+    while (bidder.squad.length < MAX_SQUAD) bidder.squad.push({ ...bidder.squad[0], id: 9000 + bidder.squad.length });
+    bidder.cash = 500;
+    const lot = s.pending.player.id;
+    s = reduce(s, { type: 'BID', amount: s.pending.minBid });
+    expect(s.pending?.kind === 'auction' && s.pending.leader).toBe(bidder.id);
+    while (s.pending?.kind === 'auction') s = reduce(s, { type: 'PASS' });
+
+    // He has the player and one man too many; nothing else moves until he sells somebody.
+    expect(s.pending).toEqual({ kind: 'release', club: bidder.id });
+    expect(s.clubs[bidder.id].squad).toHaveLength(MAX_SQUAD + 1);
+    expect(s.clubs[bidder.id].squad.some((p) => p.id === lot)).toBe(true);
+    expect(reduce(s, { type: 'END_TURN' })).toBe(s);
+    expect(reduce(s, { type: 'ROLL' })).toBe(s);
+    const out = s.clubs[bidder.id].squad[0];
+    s = reduce(s, { type: 'SELL', playerId: out.id });
+    expect(s.pending).toBeNull();
+    expect(s.clubs[bidder.id].squad).toHaveLength(MAX_SQUAD);
+
+    // The computer does the same by itself: it sells its weakest reserve.
+    let t = playCardNow(newGame(3, 9), CARDS.findIndex((c) => c.kind === 'auction'));
+    t.pending = { kind: 'release', club: currentClubId(t) };
+    const c = t.clubs[currentClubId(t)];
+    c.auto = true;
+    while (c.squad.length <= MAX_SQUAD) c.squad.push({ ...c.squad[0], id: 9500 + c.squad.length });
+    expect(botToMove(t)).toBe(true);
+    t = botStep(t);
+    expect(t.pending).toBeNull();
+    expect(t.clubs[c.id].squad).toHaveLength(MAX_SQUAD);
   });
 
   it('never lets a squad be sold below eleven', () => {
@@ -765,6 +828,25 @@ describe('lucky break cards', () => {
     expect(s.clubs[me].sellout).toBeUndefined();
   });
 
+  it('put a random player anywhere in the squad through a development programme: two levels of skill for good', () => {
+    expect(CARDS.filter((c) => c.kind === 'develop')).toHaveLength(2);
+    const picked = new Set<number>();
+    for (let seed = 1; seed <= 30; seed++) {
+      const before = newGame(2, seed);
+      const me = currentClubId(before);
+      const s = playCardNow(before, CARDS.findIndex((c) => c.kind === 'develop'));
+      expect(s.notice?.mark).toBe('lucky');
+      const changed = s.clubs[me].squad.filter((p, i) => p.skill !== before.clubs[me].squad[i].skill);
+      expect(changed).toHaveLength(1);
+      const was = before.clubs[me].squad.find((p) => p.id === changed[0].id)!;
+      expect(changed[0].skill).toBe(Math.min(9, was.skill + 2));
+      expect(changed[0].form).toBeUndefined();
+      picked.add(before.clubs[me].squad.indexOf(was));
+    }
+    // Starters and reserves alike.
+    expect(picked.size).toBeGreaterThan(8);
+  });
+
   it('cancel a boycott, and a boycott cancels a sell-out', () => {
     let s = playCardNow(newGame(2, 9), CARDS.findIndex((c) => c.kind === 'boycott'));
     s = playCardNow(s, CARDS.findIndex((c) => c.kind === 'sellout'));
@@ -856,6 +938,24 @@ describe('scorers and the golden boot', () => {
     s = reduce(s, { type: 'CONTINUE' });
     expect(s.goldenBoot).toBeNull();
     expect(s.clubs.flatMap((c) => c.squad).every((p) => p.goals === undefined)).toBe(true);
+  });
+});
+
+describe('academy', () => {
+  it('never produces a player worse than the weakest one in the squad', () => {
+    for (const floor of [2, 5, 7]) {
+      for (let seed = 1; seed <= 8; seed++) {
+        const start = newGame(2, seed);
+        const me = start.clubs[currentClubId(start)];
+        for (const p of me.squad) p.skill = Math.max(p.skill, floor);
+        const weakest = Math.min(...me.squad.map((p) => p.skill));
+        const s = playCardNow(start, CARDS.findIndex((c) => c.kind === 'youth'));
+        const youth = s.clubs[me.id].squad.find((p) => !me.squad.some((q) => q.id === p.id))!;
+        expect(youth.skill).toBeGreaterThanOrEqual(weakest);
+        // He is no better than the weakest either, unless the weakest is below what the academy turns out anyway.
+        expect(youth.skill).toBeLessThanOrEqual(Math.max(weakest, 4));
+      }
+    }
   });
 });
 
@@ -976,6 +1076,33 @@ describe('fitness and sisu', () => {
     }
   });
 
+  it('gives a gritty side an extra chance in the last ten minutes: five per cent per point of sisu, up to 25', () => {
+    const side = (spirit: number) => ({ att: 10, mid: 20, def: 20, gk: 5, spirit, shape: FORMATIONS['4-4-2'] });
+    expect(lateChanceOdds(side(3))).toBe(0);
+    expect(lateChanceOdds(side(4))).toBe(0);
+    expect(lateChanceOdds(side(5))).toBeCloseTo(0.05);
+    expect(lateChanceOdds(side(7))).toBeCloseTo(0.15);
+    expect(lateChanceOdds(side(9))).toBeCloseTo(0.25);
+
+    // Over many matches a side of sisu 9 has more chances in minutes 81-90 than one of sisu 1.
+    const late = (spirit: number) => {
+      let n = 0;
+      for (let seed = 1; seed <= 12; seed++) {
+        let s = newGame(2, seed);
+        const c = s.clubs.find((x) => !x.human)!;
+        for (const p of c.squad) p.spirit = spirit;
+        for (const id of s.humans) s.clubs[id].cash = 5000;
+        s = until(s, (s) => s.round >= 6 && s.phase !== 'matchday');
+        for (const f of s.schedule.flat()) {
+          if (f.home !== c.id && f.away !== c.id) continue;
+          n += (f.events ?? []).filter((e) => e.minute > 80 && e.minute <= 90 && e.side === (f.home === c.id ? 0 : 1)).length;
+        }
+      }
+      return n;
+    };
+    expect(late(9)).toBeGreaterThan(late(1));
+  });
+
   it('gives a gritty side a stoppage-time chance more often, and a card can promise one', () => {
     const side = (spirit: number) => ({ att: 10, mid: 20, def: 20, gk: 5, spirit, shape: FORMATIONS['4-4-2'] });
     expect(stoppageOdds(side(3))).toBe(0);
@@ -998,6 +1125,50 @@ describe('fitness and sisu', () => {
     expect(spiritBonus(side(2), side(5), true)).toBeLessThan(0);
     expect(spiritBonus(side(8, 4), side(5, 6), false)).toBeGreaterThan(0);
     expect(shootoutOdds(side(8), side(4))).toBeGreaterThan(0.5);
+  });
+
+  it('always draws EPS/I against a league club in the first round of the cup', () => {
+    for (let seed = 1; seed <= 25; seed++) {
+      const s = newGame(2, seed);
+      expect(s.cup[0]).toHaveLength(16);
+      const tie = s.cup[0].find((t) => t.a.name === 'EPS/I' || t.b.name === 'EPS/I')!;
+      const other = tie.a.name === 'EPS/I' ? tie.b : tie.a;
+      expect(other.clubId).not.toBeNull();
+      // Everybody is still in the draw exactly once.
+      const ids = s.cup[0].flatMap((t) => [t.a, t.b]).map((e) => e.clubId ?? e.name);
+      expect(new Set(ids).size).toBe(32);
+    }
+  });
+
+  it('gives clubs from outside the league a sisu of their own, within modest limits', () => {
+    const seen = new Set<number>();
+    for (let seed = 1; seed <= 5; seed++) {
+      const s = newGame(2, seed);
+      const outside = [...s.cup[0], ...s.euro.flatMap((c) => c.rounds[0])].flatMap((t) => [t.a, t.b]).filter((e) => e.clubId === null);
+      expect(outside.length).toBeGreaterThan(30);
+      for (const e of outside) {
+        expect(e.spirit).toBeGreaterThanOrEqual(4);
+        expect(e.spirit).toBeLessThanOrEqual(6.5);
+        seen.add(e.spirit!);
+      }
+    }
+    expect(seen.size).toBeGreaterThan(10);
+  });
+
+  it('compensates a gritty side more the heavier an underdog it is', () => {
+    // 11 levels per step of `lvl`: level 4 against 5 is a gap of 11, capped at 10.
+    const side = (spirit: number, total: number) => ({ att: 0, mid: total, def: 0, gk: 0, spirit, shape: FORMATIONS['4-4-2'] });
+    const even = spiritBonus(side(7, 50), side(5, 50), true);
+    const slight = spiritBonus(side(7, 48), side(5, 50), true);
+    const heavy = spiritBonus(side(7, 40), side(5, 50), true);
+    expect(even).toBeCloseTo(1.2);
+    expect(slight).toBeCloseTo(1.2 + 2 * 0.05 * 2);
+    expect(heavy).toBeCloseTo(1.2 + 2 * 0.05 * 10);
+    // The gap counts up to ten levels and no further.
+    expect(spiritBonus(side(7, 20), side(5, 50), true)).toBeCloseTo(heavy);
+    // It rewards sisu and never punishes the lack of it beyond the ordinary rule, and the favourite gets nothing extra.
+    expect(spiritBonus(side(3, 40), side(5, 50), true)).toBeCloseTo(-1.2);
+    expect(spiritBonus(side(7, 50), side(5, 40), true)).toBeCloseTo(1.2);
   });
 });
 

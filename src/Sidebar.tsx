@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CUP_ROUND_NAMES, EURO_COMPS, EURO_ROUND_NAMES, FORMATIONS, STYLE_NAME, fmt, type FormationId, type Pos } from './game/data';
 import {
   CUP_AFTER, LEAGUE_SIZE, ROUNDS, currentClubId, gateIncome, lineup, position, sellPrice, table, wages,
@@ -10,6 +10,8 @@ type Tab = 'squad' | 'table' | 'fixtures' | 'log';
 
 const TABS: [Tab, string][] = [['squad', 'Joukkue'], ['table', 'Sarja'], ['fixtures', 'Ottelut'], ['log', 'Loki']];
 const POS_ORDER: Pos[] = ['MV', 'PU', 'KK', 'HY'];
+/** Where on the pitch a line is, for saying where somebody starts. */
+const LINE_NAME: Record<Pos, string> = { MV: 'maalissa', PU: 'puolustuksessa', KK: 'keskikentällä', HY: 'hyökkäyksessä' };
 
 export function ClubName({ game, id }: { game: GameState; id: number }) {
   const c = game.clubs[id];
@@ -139,9 +141,9 @@ function EntrantName({ game, entrant }: { game: GameState; entrant: Entrant }) {
 
 const hasLeagueClub = (t: Tie) => t.a.clubId !== null || t.b.clubId !== null;
 
-/** One knockout round. Ties between two clubs from outside the league are left out while any league club is still in. */
+/** One knockout round, every tie of it: also those between two clubs from outside the league. */
 export function Ties({ game, ties, minute }: { game: GameState; ties: Tie[]; minute?: number }) {
-  const shown = ties.some(hasLeagueClub) ? ties.filter(hasLeagueClub) : ties;
+  const shown = ties;
   const human = (e: Entrant) => e.clubId !== null && game.clubs[e.clubId].human;
   return (
     <div className="fixtures">
@@ -208,6 +210,12 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
   const currentId = currentClubId(game);
   const actingId = actingClubId(game);
   const [viewId, setViewId] = useState(actingId);
+  // The sheet turns to whichever person has to act, so the sell and loan buttons are there when they are needed.
+  // It stays put while the computer moves.
+  const actorIsPerson = !game.clubs[actingId].auto;
+  useEffect(() => {
+    if (actorIsPerson) setViewId(actingId);
+  }, [actingId, actorIsPerson]);
   const club = game.clubs[viewId];
   const canEdit = viewId === currentId && !club.auto && (game.phase === 'roll' || game.phase === 'manage') && !game.pending;
   const canSell = viewId === actingId && !club.auto && (game.phase === 'roll' || game.phase === 'manage');
@@ -365,7 +373,7 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
                     : p.out > 0
                     ? <span className="neg">{p.outReason === 'ban' ? 'Pelikielto' : 'Loukkaantunut'}, {p.out} ott.</span>
                     : slot
-                      ? slot.pos === p.pos ? 'Avaus' : plays(p, slot.pos) ? `Avaus: ${slot.pos}` : `Avaus: ${slot.pos}, teho ${slot.eff}`
+                      ? slot.pos === p.pos ? 'Avaus' : plays(p, slot.pos) ? `Avaus ${LINE_NAME[slot.pos]}` : `Väärällä paikalla ${LINE_NAME[slot.pos]}, teho ${slot.eff}`
                       : 'Vaihdossa'}
                   {p.form && (
                     <span className={p.form.amount > 0 ? 'pos' : 'neg'}>
@@ -408,8 +416,8 @@ function Squad({ game, dispatch }: { game: GameState; dispatch: Dispatch }) {
         Jokainen ottelu vie avaajalta yhden kuntopisteen. Pelaaja palautuu vain, jos hän ei pelaa viikolla
         lainkaan: silloin hän saa {REST_RECOVERY} kuntopistettä. Viikolla voi olla sarjaottelun lisäksi cup- tai
         eurocupottelu. Kun kunto on enintään {TIRED_AT}, taito laskee yhdellä, ja kun se on {EXHAUSTED_AT}, kahdella. PK on puolustava keskikenttäpelaaja, joka pelaa yhtä hyvin puolustuksessa, ja HK hyökkäävä keskikenttäpelaaja, joka pelaa yhtä hyvin hyökkäyksessä. Kortit voivat nostaa tai laskea taitoa muutaman ottelun ajaksi: vihreä taito on koholla, punainen alentunut. Sisu ratkaisee tiukoissa paikoissa: vieraissa,
-        altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa. Sisukas joukkue saa myös useammin vielä yhden
-        maalipaikan lisäajalla.
+        altavastaajana, cupotteluissa ja rangaistuspotkukilpailuissa. Mitä selvempi altavastaaja sisukas joukkue on, sitä enemmän sisu auttaa. Sisukas joukkue saa myös useammin vielä yhden
+        maalipaikan ottelun viimeisillä kymmenellä minuutilla ja lisäajalla.
       </p>
     </>
   );
